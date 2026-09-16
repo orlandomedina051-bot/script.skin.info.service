@@ -8,6 +8,7 @@ import xbmc
 
 from lib.infrastructure import tasks as task_manager
 from lib.kodi.client import ADDON, log
+from lib.kodi.utilities import setting_float
 
 
 IMDB_CHECK_INTERVAL = 86400  # 24 hours
@@ -41,15 +42,6 @@ class ImdbUpdateService(threading.Thread):
         self._consecutive_failures = 0
         self._next_retry_at = 0.0
 
-    def _get_last_check(self) -> float:
-        stored = ADDON.getSetting("imdb_last_auto_check")
-        if stored:
-            try:
-                return float(stored)
-            except (ValueError, TypeError):
-                pass
-        return 0.0
-
     def _set_last_check(self) -> None:
         ADDON.setSetting("imdb_last_auto_check", str(time.time()))
 
@@ -67,7 +59,7 @@ class ImdbUpdateService(threading.Thread):
                 now = time.time()
                 if now < self._next_retry_at:
                     continue
-                if (now - self._get_last_check()) >= IMDB_CHECK_INTERVAL:
+                if (now - setting_float("imdb_last_auto_check")) >= IMDB_CHECK_INTERVAL:
                     if self._run_update(monitor):
                         self._set_last_check()
 
@@ -116,7 +108,7 @@ class ImdbUpdateService(threading.Thread):
             self._consecutive_failures = 0
             self._next_retry_at = 0.0
 
-            if db.get_synced_items_count() == 0:
+            if not db.has_synced_ratings():
                 self._run_full_update()
             else:
                 self._run_incremental(monitor)
@@ -127,6 +119,7 @@ class ImdbUpdateService(threading.Thread):
         return True
 
     def _run_incremental(self, monitor: xbmc.Monitor) -> None:
+        from lib.infrastructure.dialogs import notify_when_idle
         from lib.rating.imdb import update_changed_imdb_ratings
 
         stats = update_changed_imdb_ratings(monitor=monitor)
@@ -135,11 +128,7 @@ class ImdbUpdateService(threading.Thread):
             message = ADDON.getLocalizedString(32319).format(updated)
         else:
             message = ADDON.getLocalizedString(32320)
-        self._notify_when_idle(
-            ADDON.getLocalizedString(32318),
-            message,
-            monitor,
-        )
+        notify_when_idle(ADDON.getLocalizedString(32318), message, monitor, self.abort)
 
     def _run_full_update(self) -> None:
         from lib.rating.updater import update_library_ratings
@@ -148,24 +137,11 @@ class ImdbUpdateService(threading.Thread):
         log("Service", f"Starting IMDb full auto-update (scope={scope})", xbmc.LOGINFO)
 
         if scope in ("all", "movies_tvshows", "movies"):
-            update_library_ratings("movie", [], use_background=True, source_mode="imdb")
+            update_library_ratings("movie", [], use_background=True, source_mode="imdb",
+                                  gated=True)
         if scope in ("all", "movies_tvshows"):
-            update_library_ratings("tvshow", [], use_background=True, source_mode="imdb")
+            update_library_ratings("tvshow", [], use_background=True, source_mode="imdb",
+                                  gated=True)
         if scope == "all":
-            update_library_ratings("episode", [], use_background=True, source_mode="imdb")
-
-    def _notify_when_idle(
-        self,
-        heading: str,
-        message: str,
-        monitor: xbmc.Monitor,
-    ) -> None:
-        """Show notification, deferring until playback stops."""
-        while xbmc.getCondVisibility("Player.HasVideo"):
-            if monitor.waitForAbort(30):
-                return
-            if self.abort.is_set():
-                return
-
-        from lib.infrastructure.dialogs import show_notification
-        show_notification(heading, message)
+            update_library_ratings("episode", [], use_background=True, source_mode="imdb",
+                                  gated=True)

@@ -17,6 +17,9 @@ TMDB person information including biography, filmography, images, and crew.
 - [Filmography Container](#filmography-container)
 - [Crew Container](#crew-container)
 - [Crew Lists](#crew-lists)
+- [Library Containers (LibraryMovies / LibraryTVShows)](#library-containers-librarymovies--librarytvshows)
+- [Example Implementation](#example-implementation)
+- [Caching](#caching)
 
 ---
 
@@ -157,8 +160,8 @@ Window properties on Home window:
 | `SkinInfo.Person.Images`         | `plugin://script.skin.info.service/?action=person_info&info_type=images&person_id=N`               |
 | `SkinInfo.Person.Filmography`    | `plugin://script.skin.info.service/?action=person_info&info_type=filmography&person_id=N`          |
 | `SkinInfo.Person.Crew`           | `plugin://script.skin.info.service/?action=person_info&info_type=crew&person_id=N`                 |
-| `SkinInfo.Person.LibraryMovies`  | `plugin://script.skin.info.service/?action=person_library&info_type=movies&person_name=<encoded>`  |
-| `SkinInfo.Person.LibraryTVShows` | `plugin://script.skin.info.service/?action=person_library&info_type=tvshows&person_name=<encoded>` |
+| `SkinInfo.Person.LibraryMovies`  | `plugin://script.skin.info.service/?action=person_library&info_type=movies&person_id=N&person_name=<encoded>`  |
+| `SkinInfo.Person.LibraryTVShows` | `plugin://script.skin.info.service/?action=person_library&info_type=tvshows&person_id=N&person_name=<encoded>` |
 | `SkinInfo.Person.BlurredImage`   | `<blurred profile image path>`                                                                     |
 
 Skinners typically reference these via `$INFO[Window(Home).Property(SkinInfo.Person.Crew)]`
@@ -196,7 +199,7 @@ filter params (e.g. `&sort=date_desc&job=Director` on the Crew URL — see Plugi
 Single ListItem with biography and metadata.
 
 ```xml
-<content target="videos">
+<content>
   $INFO[Window(Home).Property(SkinInfo.Person.Details)]
 </content>
 ```
@@ -236,7 +239,7 @@ Single ListItem with biography and metadata.
 Multiple ListItems for profile images.
 
 ```xml
-<content target="images">
+<content target="pictures">
   $INFO[Window(Home).Property(SkinInfo.Person.Images)]
 </content>
 ```
@@ -308,6 +311,15 @@ Acting credits with filtering options.
 | `Overview`    | Plot summary                                               |
 | `ReleaseDate` | Release date                                               |
 | `Popularity`  | Popularity score                                           |
+| `tmdb_id`     | TMDB ID of the movie or show                               |
+| `in_library`  | `true` when the item is in the Kodi library (else not set) |
+| `dbid`        | Library ID, set only alongside `in_library`                |
+
+Use `in_library` to mark or filter owned items, and `dbid` to open the library entry:
+
+```xml
+<visible>!String.IsEmpty(ListItem.Property(in_library))</visible>
+```
 
 ### Filmography Artwork
 
@@ -437,16 +449,29 @@ Plugin paths for full crew or crew filtered by job (directors, writers, creators
 ## Library Containers (LibraryMovies / LibraryTVShows)
 
 The `?action=person_library&info_type=movies` and `&info_type=tvshows`
-plugin paths return Kodi library items where the person appears in cast.
+plugin paths return the library items the person appears in.
 Each ListItem additionally has:
 
 | Property      | Description                                          |
 |---------------|------------------------------------------------------|
-| `Role`        | Character name from the item's cast (also `Label2`)  |
+| `Role`        | Character name (also `Label2`)                       |
 
-The role is resolved from the `cast` field of the matching library item.
-When the actor's role isn't available (no role string in cast metadata),
-the property is omitted and `Label2` stays empty.
+| Parameter     | Required | Description                                                     |
+|---------------|----------|-----------------------------------------------------------------|
+| `info_type`   | Yes      | `movies` or `tvshows`                                           |
+| `person_id`   | No       | TMDB person ID; matches the person's filmography to the library |
+| `person_name` | No       | Actor name; used when `person_id` is absent or matches nothing  |
+
+Pass at least one of `person_id` or `person_name`.
+
+With `person_id`, the person's TMDB filmography is matched against the library by TMDB ID,
+and `Role` comes from the TMDB credit. This finds every library item the person appears in,
+including TV shows they only guest in and items whose cast list Kodi never recorded.
+
+With `person_name` alone, Kodi's own cast links answer instead, and `Role` comes from the
+library item's cast. Kodi links only main cast at show level, so guest appearances are
+missing. For Clancy Brown, a name lookup returns 3 TV shows where a filmography match
+returns 48.
 
 ---
 
@@ -456,14 +481,22 @@ the property is omitted and `Label2` stays empty.
 <control type="group">
     <visible>!String.IsEmpty(Window(Home).Property(SkinInfo.person_id))</visible>
 
+    <!-- Details -->
+    <control type="list" id="9000">
+        <content>
+          $INFO[Window(Home).Property(SkinInfo.Person.Details)]
+        </content>
+        <itemlayout />
+    </control>
+
     <!-- Biography -->
     <control type="textbox">
-        <label>$INFO[Container(PersonDetails).ListItem.Property(Biography)]</label>
+        <label>$INFO[Container(9000).ListItem.Property(Biography)]</label>
     </control>
 
     <!-- Profile Images -->
-    <control type="fixedlist" id="PersonImages">
-        <content target="images">
+    <control type="fixedlist" id="9001">
+        <content target="pictures">
           $INFO[Window(Home).Property(SkinInfo.Person.Images)]
         </content>
         <itemlayout>
@@ -474,7 +507,7 @@ the property is omitted and `Label2` stays empty.
     </control>
 
     <!-- Filmography -->
-    <control type="list" id="PersonFilmography">
+    <control type="list" id="9002">
         <content target="videos">
           plugin://script.skin.info.service/
             ?action=person_info

@@ -67,7 +67,7 @@ class ArtworkAuto:
             from lib.data.api.artwork import create_default_fetcher
             self.source_fetcher = create_default_fetcher()
 
-    def _is_cancelled(self) -> bool:
+    def _cancel_requested(self) -> bool:
         """True if the progress dialog was cancelled or the owning task aborted."""
         if self._abort_flag is not None and self._abort_flag.is_requested():
             return True
@@ -131,7 +131,7 @@ class ArtworkAuto:
                     break
 
                 for item in batch:
-                    if self._is_cancelled():
+                    if self._cancel_requested():
                         self.cancelled = True
                         break
 
@@ -157,8 +157,8 @@ class ArtworkAuto:
 
     def _reconcile_slideshow_pool(self) -> None:
         """One batched slideshow-pool reconcile after a bulk run (per-item refresh was deferred)."""
-        pool_types = ('movie', 'tvshow', 'artist')
-        scope = tuple(t for t in pool_types
+        from lib.service.slideshow import POOL_MEDIA_TYPES
+        scope = tuple(t for t in POOL_MEDIA_TYPES
                       if self.media_filter is None or t in self.media_filter)
         if not scope:
             return
@@ -175,9 +175,9 @@ class ArtworkAuto:
             dbid = queue_item.dbid
             title = queue_item.title
 
-            art_items = db.get_art_items_for_queue(queue_item.id)
+            art_items = db.get_art_items_for_queue(media_type, dbid)
 
-            all_available_art = self.source_fetcher.fetch_all(media_type, dbid)
+            all_available_art = self.source_fetcher.fetch_all(media_type, dbid, bulk=True)
 
             applied_any = False
             no_art_available = False
@@ -210,15 +210,15 @@ class ArtworkAuto:
                 if best:
                     self._apply_art(media_type, dbid, {art_type: best['url']}, title=title,
                                     artwork_type=art_type, defer_pool_refresh=True)
-                    db.update_art_item(art_item.id, best['url'], auto_applied=True)
+                    db.update_art_item(media_type, dbid, art_type, best['url'])
                     applied_any = True
                     self.stats['auto_applied'] += 1
                     self.applied_items.append((title, art_type, best['url']))
 
             if applied_any:
-                db.update_queue_status(queue_item.id, 'completed')
+                db.update_queue_status(media_type, dbid, 'completed')
             else:
-                db.update_queue_status(queue_item.id, 'skipped')
+                db.update_queue_status(media_type, dbid, 'skipped')
                 if no_art_available:
                     self.skipped_items.append((title, ADDON.getLocalizedString(32009)))
                 elif blocked_by_policy:
@@ -233,15 +233,12 @@ class ArtworkAuto:
         except Exception as e:
             log("Artwork", f"Error processing item: {str(e)}", xbmc.LOGERROR)
             self.stats['errors'] += 1
-            db.update_queue_status(queue_item.id, 'error')
+            db.update_queue_status(queue_item.media_type, queue_item.dbid, 'error')
 
     def _apply_art(self, media_type: str, dbid: int, art_dict: dict, title: str = "",
                    artwork_type: str = "", defer_pool_refresh: bool = False) -> bool:
-        """Apply artwork to library item and optionally download to filesystem.
-
-        `defer_pool_refresh` skips the per-item slideshow-pool update (the bulk auto-apply path
-        does one batched reconcile at the end instead).
-        """
+        """Apply artwork to a library item, optionally downloading it and deferring the
+        slideshow-pool refresh."""
         if media_type not in KODI_SET_DETAILS_METHODS:
             return False
 
@@ -261,8 +258,7 @@ class ArtworkAuto:
                 if url.startswith('http'):
                     self._download_artwork(media_type, dbid, artwork_type, url, title)
 
-            if (not defer_pool_refresh and 'fanart' in art_dict
-                    and media_type in ('movie', 'tvshow', 'artist')):
+            if not defer_pool_refresh and 'fanart' in art_dict:
                 from lib.service.slideshow import refresh_pool_item
                 refresh_pool_item(media_type, dbid)
 

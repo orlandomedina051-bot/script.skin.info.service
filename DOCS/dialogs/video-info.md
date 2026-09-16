@@ -136,7 +136,8 @@ opens. Blur radius follows the skin string `SkinInfo.BlurRadius` (default 40).
 ### Ratings
 
 Each source provides three properties: `Rating.{source}`, `Rating.{source}.Votes`,
-`Rating.{source}.Percent` (0-100).
+`Rating.{source}.Percent` (0-100). Roger Ebert and Letterboxd add `Rating.{source}.Stars`,
+their own number out of 4 and 5, since the rest are rescaled to Kodi's 0-10.
 
 | Source key | Provider |
 |------------|----------|
@@ -150,6 +151,9 @@ Each source provides three properties: `Rating.{source}`, `Rating.{source}.Votes
 | `Rating.myanimelist` | MDBList |
 | `Rating.tomatoes` | MDBList, OMDb backfill |
 | `Rating.popcorn` | MDBList, OMDb backfill |
+| `Rating.mdblistscore` | MDBList |
+
+`Rating.mdblistscore` is MDBList's own aggregate of the other sources, not a rating their users gave. It carries no vote count.
 
 Which sources appear depends on what the providers return for the title. Property names are
 case-insensitive.
@@ -160,6 +164,7 @@ case-insensitive.
 |----------|--------|
 | `Tomatometer` | `Certified`, `Fresh`, `Rotten` |
 | `Popcornmeter` | `Hot`, `Fresh`, `Spilled` |
+| `Metacritic` | `MustSee` |
 
 ### Awards (OMDb)
 
@@ -169,6 +174,22 @@ case-insensitive.
 | `Awards.Oscar.Wins` / `Awards.Oscar.Nominations` | Oscars |
 | `Awards.Emmy.Wins` / `Awards.Emmy.Nominations` | Emmys |
 | `Awards.Other.Wins` / `Awards.Other.Nominations` | Other wins/nominations |
+
+#### Awards (MDBList)
+
+MDBList tags whether a title won or was nominated, never how many times. These sit alongside the
+counts above, which come from OMDb. Each is `"true"` when it applies and absent otherwise.
+
+| Property | Description |
+|----------|-------------|
+| `Awards.Oscar.Won` / `Awards.Oscar.Nominated` | Academy Award |
+| `Awards.BestPicture.Won` / `Awards.BestPicture.Nominated` | Best Picture |
+| `Awards.BestDirector.Won` / `Awards.BestDirector.Nominated` | Best Director |
+| `Awards.GoldenGlobe.Won` / `Awards.GoldenGlobe.Nominated` | Golden Globe |
+| `Awards.Razzie.Won` / `Awards.Razzie.Nominated` | Golden Raspberry |
+| `Awards.Emmy.Nominated` | Emmy |
+| `Awards.Festival.Cannes` / `.Venice` / `.Sundance` / `.Toronto` | Festival top prize |
+| `Awards.FilmRegistry` | US National Film Registry |
 
 ### Common Sense Media (MDBList)
 

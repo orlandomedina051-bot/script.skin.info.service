@@ -58,9 +58,18 @@ def _handle_widgets_menu(handle: int) -> None:
          "DefaultAddonVideo.png", True),
         (ADDON.getLocalizedString(32620), "plugin://script.skin.info.service/?action=next_up",
          "DefaultInProgressShows.png", True),
+        (ADDON.getLocalizedString(32685),
+         "plugin://script.skin.info.service/?action=next_up_favourites",
+         "DefaultTVShows.png", True),
         (ADDON.getLocalizedString(32621),
          "plugin://script.skin.info.service/?action=recent_episodes_grouped",
          "DefaultRecentlyAddedEpisodes.png", True),
+        (ADDON.getLocalizedString(32686),
+         "plugin://script.skin.info.service/?action=recent_videos",
+         "DefaultVideo.png", True),
+        (xbmc.getLocalizedString(1036),
+         "plugin://script.skin.info.service/?action=menu_favourites",
+         "DefaultFavourites.png", True),
         (ADDON.getLocalizedString(32622), "plugin://script.skin.info.service/?action=menu_seasonal",
          "DefaultYear.png", True),
         (ADDON.getLocalizedString(32623),
@@ -94,6 +103,30 @@ def _handle_seasonal_menu(handle: int) -> None:
         xbmcplugin.addDirectoryItem(
             handle, f"plugin://script.skin.info.service/?action=seasonal&season={key}",
             li, isFolder=True)
+
+    xbmcplugin.endOfDirectory(handle, succeeded=True)
+
+
+_FAVOURITES_MENU = [
+    (None, "", "DefaultFavourites.png"),
+    (32687, "movie", "DefaultMovies.png"),
+    (32688, "tvshow", "DefaultTVShows.png"),
+    (32689, "episode", "DefaultTVShows.png"),
+    (32690, "musicvideo", "DefaultMusicVideos.png"),
+]
+
+
+def _handle_favourites_menu(handle: int) -> None:
+    """Show favourites submenu: everything, then one entry per media type."""
+    for string_id, dbtype, icon in _FAVOURITES_MENU:
+        label = (xbmc.getLocalizedString(1036) if string_id is None
+                 else ADDON.getLocalizedString(string_id))
+        li = xbmcgui.ListItem(label, offscreen=True)
+        li.setArt({'icon': icon, 'thumb': icon})
+        url = "plugin://script.skin.info.service/?action=favourites"
+        if dbtype:
+            url += f"&dbtype={dbtype}"
+        xbmcplugin.addDirectoryItem(handle, url, li, isFolder=True)
 
     xbmcplugin.endOfDirectory(handle, succeeded=True)
 
@@ -159,6 +192,21 @@ def _handle_discover_tvshows_menu_action(handle: int, params: dict) -> None:
 def _handle_next_up(handle: int, params: dict) -> None:
     from lib.plugin.widgets.video import handle_next_up
     handle_next_up(handle, params)
+
+
+def _handle_next_up_favourites(handle: int, params: dict) -> None:
+    from lib.plugin.widgets.video import handle_next_up_favourites
+    handle_next_up_favourites(handle, params)
+
+
+def _handle_favourites(handle: int, params: dict) -> None:
+    from lib.plugin.widgets.favourites import handle_favourites
+    handle_favourites(handle, params)
+
+
+def _handle_recent_videos(handle: int, params: dict) -> None:
+    from lib.plugin.widgets.video import handle_recent_videos
+    handle_recent_videos(handle, params)
 
 
 def _handle_recent_episodes_grouped(handle: int, params: dict) -> None:
@@ -265,6 +313,7 @@ _HANDLERS = {
     'menu_search': _wrap_menu(_handle_search_menu),
     'menu_widgets': _wrap_menu(_handle_widgets_menu),
     'menu_seasonal': _wrap_menu(_handle_seasonal_menu),
+    'menu_favourites': _wrap_menu(_handle_favourites_menu),
     'exec_tools': _handle_exec_tools,
     'exec_search': _handle_exec_search,
     'get_cast': _handle_get_cast,
@@ -275,7 +324,10 @@ _HANDLERS = {
     'discover_movies_menu': _handle_discover_movies_menu_action,
     'discover_tvshows_menu': _handle_discover_tvshows_menu_action,
     'next_up': _handle_next_up,
+    'next_up_favourites': _handle_next_up_favourites,
+    'favourites': _handle_favourites,
     'recent_episodes_grouped': _handle_recent_episodes_grouped,
+    'recent_videos': _handle_recent_videos,
     'by_actor': _handle_by_actor,
     'by_director': _handle_by_director,
     'similar': _handle_similar,
@@ -325,12 +377,14 @@ def main() -> None:
         handler(handle, params)
         return
 
-    from lib.plugin.widgets.discovery import WIDGET_REGISTRY, handle_discover
-    if action in WIDGET_REGISTRY:
-        handle_discover(handle, action, params)
-    else:
-        from lib.plugin.dbid import handle_dbid_query
-        handle_dbid_query(handle, params)
+    if action:
+        from lib.plugin.widgets.discovery import WIDGET_REGISTRY, handle_discover
+        if action in WIDGET_REGISTRY:
+            handle_discover(handle, action, params)
+            return
+
+    from lib.plugin.dbid import handle_dbid_query
+    handle_dbid_query(handle, params)
 
 
 if __name__ == "__main__":

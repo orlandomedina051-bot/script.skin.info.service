@@ -28,7 +28,7 @@ Returns deduplicated cast list for movies, TV shows, seasons, movie sets, or epi
 | Parameter | Required | Description |
 |-----------|----------|-------------|
 | `dbid` | Conditional | Library ID of the item. Required when `online=false`. Omit for non-library (add-on) items. |
-| `tmdb_id` | Conditional | TMDB ID. With `online=true`, used directly and takes precedence over `dbid`/`imdb_id`. |
+| `tmdb_id` | Conditional | TMDB ID. With `online=true`, used directly and takes precedence over `dbid`/`imdb_id` for `movie`, `tvshow` and `set`. For `episode` and `season` a `dbid` wins, because TMDB needs the show's ID rather than the episode's. |
 | `imdb_id` | Conditional | IMDb ID (`tt…`). With `online=true`, resolved to a TMDB ID when `tmdb_id` is absent. |
 | `dbtype` | Yes | Media type: `movie`, `tvshow`, `season`, `set`, `episode` |
 | `season` | Conditional | Season number. Needed for `episode`/`season` in `online` mode when there is no `dbid`. |
@@ -108,6 +108,15 @@ For episodes, also pass the season and episode numbers (the ids are the show's):
 ```
 
 Pass both `tmdb_id` and `imdb_id` when available; `tmdb_id` is used directly and `imdb_id` is the fallback. A skin can pick library vs online with a `String.IsEmpty(ListItem.DBID)` condition.
+
+### Library Mode
+
+Kodi stores guest stars on the episode, not on the show:
+
+- `tvshow` - Show cast only, no guest stars. Online, this is TMDB's billed show cast; where TMDB
+  has none it falls back to the regulars across every season, then to every credited actor
+- `episode` - Episode cast (guest stars included) plus the show cast
+- `season` - Deduplicated cast from every episode in the season, so guest stars are included
 
 ### Online Mode
 

@@ -17,6 +17,34 @@ from lib.kodi.formatters import (
 from lib.kodi.utilities import MULTI_VALUE_SEP
 
 
+# MDBList only
+_AWARD_PROPS = {
+    "oscar-winner": "Awards.Oscar.Won",
+    "oscar-nominated": "Awards.Oscar.Nominated",
+    "best-picture-winner": "Awards.BestPicture.Won",
+    "best-picture-nominated": "Awards.BestPicture.Nominated",
+    "oscar-best-director-winner": "Awards.BestDirector.Won",
+    "oscar-best-director-nominee": "Awards.BestDirector.Nominated",
+    "golden-globe-winner": "Awards.GoldenGlobe.Won",
+    "golden-globe-nominated": "Awards.GoldenGlobe.Nominated",
+    "razzie-winner": "Awards.Razzie.Won",
+    "razzie-nominee": "Awards.Razzie.Nominated",
+    "emmy-award-nominated": "Awards.Emmy.Nominated",
+    "festival-cannes-winner": "Awards.Festival.Cannes",
+    "festival-venice-winner": "Awards.Festival.Venice",
+    "festival-sundance-winner": "Awards.Festival.Sundance",
+    "festival-toronto-winner": "Awards.Festival.Toronto",
+    "national-film-preservation-board-winner": "Awards.FilmRegistry",
+    "national-film-registry": "Awards.FilmRegistry",
+}
+
+_STATUS_PROPS = {
+    "tomatoes": ("Tomatometer", {"certified": "Certified", "fresh": "Fresh", "rotten": "Rotten"}),
+    "popcorn": ("Popcornmeter", {"hot": "Hot", "fresh": "Fresh", "spilled": "Spilled"}),
+    "metacritic": ("Metacritic", {"mustsee": "MustSee"}),
+}
+
+
 def fetch_omdb_data(media_type: str, imdb_id: str, abort_flag=None) -> Dict[str, str]:
     """Fetch OMDb awards plus ratings (imdb/metacritic/rotten tomatoes) from the same response."""
     from lib.data.api.omdb import ApiOmdb
@@ -31,14 +59,17 @@ def fetch_omdb_data(media_type: str, imdb_id: str, abort_flag=None) -> Dict[str,
 
     try:
         omdb = ApiOmdb()
-        awards_data = omdb.get_awards(imdb_id, abort_flag=abort_flag)
+        awards_data = omdb.get_awards(media_type, imdb_id, abort_flag=abort_flag)
         if awards_data:
-            props["Awards.Oscar.Wins"] = str(awards_data.get("oscar_wins", 0))
-            props["Awards.Oscar.Nominations"] = str(awards_data.get("oscar_nominations", 0))
-            props["Awards.Emmy.Wins"] = str(awards_data.get("emmy_wins", 0))
-            props["Awards.Emmy.Nominations"] = str(awards_data.get("emmy_nominations", 0))
-            props["Awards.Other.Wins"] = str(awards_data.get("other_wins", 0))
-            props["Awards.Other.Nominations"] = str(awards_data.get("other_nominations", 0))
+            counts = {
+                "Awards.Oscar.Wins": awards_data.get("oscar_wins"),
+                "Awards.Oscar.Nominations": awards_data.get("oscar_nominations"),
+                "Awards.Emmy.Wins": awards_data.get("emmy_wins"),
+                "Awards.Emmy.Nominations": awards_data.get("emmy_nominations"),
+                "Awards.Other.Wins": awards_data.get("other_wins"),
+                "Awards.Other.Nominations": awards_data.get("other_nominations"),
+            }
+            props.update({k: str(v) for k, v in counts.items() if v})
             props["Awards"] = awards_data.get("awards_text", "")
 
         ratings = omdb.fetch_ratings(media_type, {"imdb": imdb_id}, abort_flag=abort_flag)
@@ -117,21 +148,20 @@ def fetch_mdblist_data(
                         normalized_source, rating_data["rating"], int(rating_data["votes"])
                     ))
 
-        rt_status = mdblist.get_rt_status(mdblist_media_type, ids, abort_flag=abort_flag)
-        if rt_status:
-            if rt_status.get("certified"):
-                props["Tomatometer"] = "Certified"
-            elif rt_status.get("fresh"):
-                props["Tomatometer"] = "Fresh"
-            elif rt_status.get("rotten"):
-                props["Tomatometer"] = "Rotten"
+        status = mdblist.get_rating_status(mdblist_media_type, ids, abort_flag=abort_flag)
+        for source, state in (status or {}).items():
+            prop, labels = _STATUS_PROPS.get(source, (None, {}))
+            if prop and state in labels:
+                props[prop] = labels[state]
 
-            if rt_status.get("hot"):
-                props["Popcornmeter"] = "Hot"
-            elif rt_status.get("popcorn"):
-                props["Popcornmeter"] = "Fresh"
-            elif rt_status.get("stale"):
-                props["Popcornmeter"] = "Spilled"
+        for tag in mdblist.get_award_tags(mdblist_media_type, ids, abort_flag=abort_flag):
+            prop = _AWARD_PROPS.get(tag)
+            if prop:
+                props[prop] = "true"
+
+        score = mdblist.get_score(mdblist_media_type, ids, abort_flag=abort_flag)
+        if score is not None:
+            props.update(format_rating_props("mdblistscore", score, 0))
 
     except Exception as e:
         log("Plugin", f"MDBList fetch error: {e}", xbmc.LOGWARNING)
@@ -189,7 +219,7 @@ def fetch_trakt_data(
 def handle_online(handle: int, params: dict) -> None:
     """Plugin entry for the online-data ListItem; library mode needs `dbid`+`dbtype`, direct mode
     needs `tmdb_id` or `imdb_id`."""
-    from lib.service.online import fetch_all_online_data
+    from lib.service.online.fetchers import fetch_all_online_data
     from lib.kodi.client import get_item_details
     from lib.data.api.tmdb import ApiTmdb
 

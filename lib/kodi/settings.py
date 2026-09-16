@@ -52,6 +52,26 @@ class KodiSettings:
         return cls.get_bool('enable_debug')
 
     @classmethod
+    def ratings_source_tmdb(cls) -> bool:
+        """Whether TMDB takes part in a ratings update."""
+        return cls.get_bool('ratings_source_tmdb')
+
+    @classmethod
+    def ratings_source_mdblist(cls) -> bool:
+        """Whether MDBList takes part in a ratings update."""
+        return cls.get_bool('ratings_source_mdblist')
+
+    @classmethod
+    def ratings_source_omdb(cls) -> bool:
+        """Whether OMDb takes part in a ratings update."""
+        return cls.get_bool('ratings_source_omdb')
+
+    @classmethod
+    def ratings_source_trakt(cls) -> bool:
+        """Whether Trakt takes part in a ratings update."""
+        return cls.get_bool('ratings_source_trakt')
+
+    @classmethod
     def prefer_fanart_language(cls) -> bool:
         """Check if fanart language preference is enabled."""
         return cls.get_bool('prefer_fanart_language')
@@ -97,6 +117,11 @@ class KodiSettings:
         return cls.get_string('preferred_language')
 
     @classmethod
+    def musicvideo_thumb_source(cls) -> str:
+        """Which image auto-apply puts in an empty music video thumb slot."""
+        return cls.get_string('musicvideo_thumb_source') or 'screenshots'
+
+    @classmethod
     def art_types_to_check(cls) -> str:
         """Get enabled art types from individual boolean settings."""
         art_types = []
@@ -105,6 +130,7 @@ class KodiSettings:
             ('art_type_fanart', 'fanart'),
             ('art_type_clearlogo', 'clearlogo'),
             ('art_type_clearart', 'clearart'),
+            ('art_type_thumb', 'thumb'),
             ('art_type_banner', 'banner'),
             ('art_type_landscape', 'landscape'),
             ('art_type_discart', 'discart'),
@@ -115,4 +141,3 @@ class KodiSettings:
             if cls.get_bool(setting_id):
                 art_types.append(art_type)
         return ','.join(art_types)
-

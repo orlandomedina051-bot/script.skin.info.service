@@ -8,8 +8,12 @@ Widget content sourced from the Kodi library. See also: [Discovery Widgets](widg
 
 ## Table of Contents
 
+- [Localized Labels](#localized-labels)
 - [Next Up](#next-up)
+- [Next Up (Favourites)](#next-up-favourites)
 - [Recent Episodes Grouped](#recent-episodes-grouped)
+- [Recent Videos](#recent-videos)
+- [Favourites](#favourites)
 - [By Actor](#by-actor)
 - [By Director](#by-director)
 - [Similar Items](#similar-items)
@@ -22,9 +26,49 @@ Widget content sourced from the Kodi library. See also: [Discovery Widgets](widg
 
 ---
 
+## Localized Labels
+
+Each widget has a translated label you can reuse, so your widget heading follows the user's
+language instead of hardcoded English:
+
+```xml
+<label>$ADDON[script.skin.info.service 32620]</label>
+```
+
+| Widget | Action | Label |
+|--------|--------|-------|
+| Next Up | `next_up` | 32620 |
+| Next Up (Favourites) | `next_up_favourites` | 32685 |
+| Recent Episodes Grouped | `recent_episodes_grouped` | 32621, renders "Recent Episodes" |
+| Recent Videos | `recent_videos` | 32686 |
+| Favourites | `favourites` | Kodi 1036 |
+| Favourite Movies | `favourites&dbtype=movie` | 32687 |
+| Favourite TV Shows | `favourites&dbtype=tvshow` | 32688 |
+| Favourite Episodes | `favourites&dbtype=episode` | 32689 |
+| Favourite Music Videos | `favourites&dbtype=musicvideo` | 32690 |
+| Recommended (movies) | `recommended&dbtype=movie` | 32623, renders "Recommended Movies" |
+| Recommended (TV shows) | `recommended&dbtype=tvshow` | 32624, renders "Recommended TV Shows" |
+| Seasonal (christmas) | `seasonal&season=christmas` | 32642 |
+| Seasonal (halloween) | `seasonal&season=halloween` | 32643 |
+| Seasonal (valentines) | `seasonal&season=valentines` | 32644 |
+| Seasonal (thanksgiving) | `seasonal&season=thanksgiving` | 32645 |
+| Seasonal (starwars) | `seasonal&season=starwars` | 32646 |
+| Seasonal (startrek) | `seasonal&season=startrek` | 32647 |
+| Seasonal (newyear) | `seasonal&season=newyear` | 32648 |
+| Seasonal (easter) | `seasonal&season=easter` | 32649 |
+| Seasonal (independence) | `seasonal&season=independence` | 32650 |
+
+Kodi core strings are marked as such and come from `$LOCALIZE[1036]` rather than the addon.
+Widgets with no row have no label of their own, so name them yourself.
+
+---
+
 ## Next Up
 
 Returns the next unwatched episode for each in-progress TV show.
+
+For the same thing over your favourited shows instead, see
+[Next Up (Favourites)](#next-up-favourites).
 
 ### Usage
 
@@ -57,6 +101,60 @@ Returns the next unwatched episode for each in-progress TV show.
 2. For each show, finds the last played episode
 3. Returns the next unwatched episode in same season
 4. If season complete, returns first unwatched overall
+
+### Item Properties
+
+- **Label**: Formatted as `2x05. Episode Title`
+- **MediaType**: `episode`
+- **Video Info**: title, season, episode, showtitle, plot, rating, runtime, firstaired
+- **Artwork**: TV show artwork + episode thumb
+- **Resume Point**: If partially watched
+
+**Widget Type:** Episode
+
+---
+
+## Next Up (Favourites)
+
+[Next Up](#next-up) restricted to the TV shows in your Kodi favourites.
+
+Shows appear in the order you favourited them, and one you have never started appears at its
+first episode. Fully watched shows are skipped.
+
+### Usage
+
+```xml
+<content>plugin://script.skin.info.service/?action=next_up_favourites</content>
+```
+
+### Parameters
+
+| Parameter | Required | Default | Description |
+|-----------|----------|---------|-------------|
+| `limit` | No | 25 | Maximum episodes to return |
+
+### Examples
+
+```xml
+<!-- Basic -->
+<content>plugin://script.skin.info.service/?action=next_up_favourites</content>
+
+<!-- Custom limit -->
+<content>plugin://script.skin.info.service/?action=next_up_favourites&amp;limit=10</content>
+
+<!-- With auto-refresh -->
+<content>plugin://script.skin.info.service/?action=next_up_favourites&amp;refresh=$INFO[Window(Home).Property(SkinInfo.Library.Refreshed)]</content>
+```
+
+### Behavior
+
+1. Reads TV shows from the favourites list, keeping the order you favourited them
+2. Skips shows that are fully watched
+3. Returns the next unwatched episode in the season last played
+4. If the show has not been started, returns its first unwatched episode
+
+Only shows favourited from the library are used. Favourites pointing at a file or an add-on are
+ignored.
 
 ### Item Properties
 
@@ -108,6 +206,119 @@ Recently added episodes with intelligent grouping.
 Returns **mixed** episode and TV show items.
 
 **Widget Type:** Mixed
+
+---
+
+## Recent Videos
+
+Recently added movies and episodes in one list, interleaved by the date they were added.
+
+Kodi has no equivalent: `videodb://recentlyaddedmovies/` and `videodb://recentlyaddedepisodes/`
+are separate nodes, two `<content>` tags list one after the other rather than interleaving, and no
+smart playlist type combines movies with episodes.
+
+### Usage
+
+```xml
+<content>plugin://script.skin.info.service/?action=recent_videos</content>
+```
+
+### Parameters
+
+| Parameter | Required | Default | Description |
+|-----------|----------|---------|-------------|
+| `limit` | No | 25 | Maximum items to return |
+| `group` | No | `true` | One row per show. `false` lists every episode |
+
+### Examples
+
+```xml
+<!-- Basic -->
+<content>plugin://script.skin.info.service/?action=recent_videos</content>
+
+<!-- Every episode, ungrouped -->
+<content>plugin://script.skin.info.service/?action=recent_videos&amp;group=false</content>
+
+<!-- With auto-refresh -->
+<content>plugin://script.skin.info.service/?action=recent_videos&amp;refresh=$INFO[Window(Home).Property(SkinInfo.Library.Refreshed)]</content>
+```
+
+### Behavior
+
+1. Fetches movies and episodes added in the last year, each sorted by date added. If that window
+   holds fewer items than `limit`, the whole library is used instead
+2. With `group=true`, each show contributes one row: a show folder when its two newest episodes
+   were added on the same day, otherwise its newest episode
+3. Merges both into one list ordered by date added, then trims to `limit`
+
+Grouping keeps a batch add from filling the widget. A season added at once collapses to a single
+row, while a show airing weekly still shows its individual episode.
+
+### Item Properties
+
+- **MediaType**: `movie`, `episode`, or `tvshow` for a collapsed show
+- **DateAdded**: set on every item, so lists can be sorted or labelled by it
+- **Artwork**: movie artwork, or TV show artwork plus episode thumb
+
+Collapsed show rows are folders that open the show; everything else is playable.
+
+**Widget Type:** Mixed video
+
+---
+
+## Favourites
+
+Your Kodi favourites, resolved back to their library items so they carry full metadata.
+
+Kodi's own favourites list stores only a label, a thumb and a path or window target. This resolves
+each one to the library item behind it, so the widget gets poster, fanart, clearlogo, plot, rating,
+watched state and resume point. It also lets you show one media type on its own, which the plain
+favourites list cannot do.
+
+### Usage
+
+```xml
+<content>plugin://script.skin.info.service/?action=favourites&amp;dbtype=movie</content>
+```
+
+### Parameters
+
+| Parameter | Required | Default | Description |
+|-----------|----------|---------|-------------|
+| `dbtype` | No | all | `movie`, `tvshow`, `episode` or `musicvideo`. Omit for every resolved favourite |
+| `limit` | No | 0 | Maximum items; 0 returns all |
+
+### Examples
+
+```xml
+<!-- Favourited movies only -->
+<content>plugin://script.skin.info.service/?action=favourites&amp;dbtype=movie</content>
+
+<!-- Favourited TV shows only -->
+<content>plugin://script.skin.info.service/?action=favourites&amp;dbtype=tvshow</content>
+
+<!-- Everything, mixed -->
+<content>plugin://script.skin.info.service/?action=favourites</content>
+```
+
+### Behavior
+
+1. Reads the favourites list, keeping the order you favourited things
+2. TV shows are matched by the database id stored in the favourite
+3. Movies, episodes and music videos are matched on their file path
+4. Favourites whose item is no longer in the library are skipped
+
+Favourites pointing at an add-on or a plugin path are not resolved and do not appear. TV show rows
+are folders that open the show; everything else is playable.
+
+### Item Properties
+
+- **MediaType**: `movie`, `tvshow`, `episode` or `musicvideo`
+- **Artwork**: full library artwork for the resolved item
+- **Video Info**: plot, rating, year, and watched state
+- **Resume Point**: If partially watched
+
+**Widget Type:** Mixed video, or the requested `dbtype`
 
 ---
 
@@ -214,7 +425,8 @@ Items by a random director from the source item.
 
 ## Similar Items
 
-Items similar to source based on genre matching with year/MPAA scoring.
+Items similar to the source. Shared genre count decides the order first, then tags, crew, era,
+certificate and popularity break the tie within each group.
 
 ### Usage
 
@@ -224,36 +436,49 @@ Items similar to source based on genre matching with year/MPAA scoring.
 
 <!-- TMDB-only item as seed (no library entry) -->
 <content>plugin://script.skin.info.service/?action=similar&amp;tmdb_id=$INFO[ListItem.Property(tmdb_id)]&amp;dbtype=movie</content>
+
+<!-- Only unwatched, scored inside your own smart playlist -->
+<content>plugin://script.skin.info.service/?action=similar&amp;dbid=$INFO[ListItem.DBID]&amp;dbtype=movie&amp;watched=unwatched&amp;path=special://profile/playlists/video/My%20List.xsp</content>
 ```
 
 ### Parameters
 
 | Parameter | Required | Default | Description |
 |-----------|----------|---------|-------------|
-| `dbid` | Conditional | - | Library ID. Provide this OR `tmdb_id`. Library seed gives the richest scoring (year + MPAA proximity). |
-| `tmdb_id` | Conditional | - | TMDB ID. Used when no library entry exists. Genres pulled from TMDB; MPAA proximity scoring skipped. |
-| `dbtype` | No | movie | Source type (`movie`, `tvshow`, `episode`) |
+| `dbid` | Conditional | - | Library ID. Provide this OR `tmdb_id`. A library seed scores on everything below. |
+| `tmdb_id` | Conditional | - | TMDB ID. Used when no library entry exists. Only genres and year come from TMDB. |
+| `dbtype` | No | movie | Source type (`movie`, `set`, `tvshow`). An `episode` source returns nothing; pass its show instead. |
 | `limit` | No | 25 | Maximum items |
+| `watched` | No | both | `watched`, `unwatched` or `both` |
+| `path` | No | - | Score inside this path instead of the whole library. Takes a `.xsp` file, an inline XSP filter or a smart playlist. |
 
 Results are always **library items** — `tmdb_id` only changes how the seed's genres are obtained.
 
-### Scoring
+### Ordering
 
-- **Genre overlap**: +10 points per matching genre
-- **Year proximity**: +3 (≤5 years), +2 (≤10 years), +1 (≤20 years)
-- **MPAA match**: +2 points
+Items sharing more genres always rank above items sharing fewer, so the list works down a group at
+a time until it reaches `limit`. Within a group:
+
+- **Tags**: rarer shared tags count for more than common ones. Tags come from the scraper, so this
+  needs "Add tags" enabled in the scraper settings; without them the remaining signals still order
+  the list.
+- **Crew**: shared director, then writer, then studio
+- **Era**: closer release years
+- **Certificate**: same rating, compared per country so `NL:16` and `GR:16` stay distinct
+- **Popularity**: vote count and rating, which decides items that match on nothing else
+- **Same set**: penalised, because Kodi already groups sets of its own
 
 ### Example
 
-Source: "The Dark Knight" (Action, Crime, Drama | 2008 | PG-13)
+Source: "The Dark Knight" (Action, Crime, Drama)
 
-- "Heat" (Action, Crime, Drama | 1995 | R) = 31 points
-- "Inception" (Action, Sci-Fi | 2010 | PG-13) = 15 points
+- "Heat" (Action, Crime, Drama) ranks above every two-genre match, whatever its rating
+- "Inception" (Action, Sci-Fi) only appears once the three-genre matches run out
 
 **Widget Type:**
 
 - **Source movie/set**: Movie widget
-- **Source tvshow/episode**: TV Show widget
+- **Source tvshow**: TV Show widget
 
 ---
 
@@ -261,7 +486,7 @@ Source: "The Dark Knight" (Action, Crime, Drama | 2008 | PG-13)
 
 Personalized recommendations from your watch history.
 
-By default this is single-seed: it picks titles most like your single most recent watch, matching on genre, MPAA tone, shared director, shared cast, and release era. Every item is tagged with that seed, so the widget can show a "Recommended based on <title>" header. Add `multi=true` for a blend across several recent watches instead, weighted toward the most recent.
+By default this is single-seed: it picks titles most like your single most recent watch, matching on genre, MPAA tone, shared director, and release era. Every item is tagged with that seed, so the widget can show a "Recommended based on <title>" header. Add `multi=true` for a blend across several recent watches instead, weighted toward the most recent.
 
 ### Usage
 
@@ -310,6 +535,7 @@ By default this is single-seed: it picks titles most like your single most recen
 ### Notes
 
 - Requires watch history; only returns unwatched items.
+- A TV show counts as watched history once any episode is watched, and as an unwatched pick only while no episode is watched.
 - Single-seed fills to `limit` with same-tone titles when there are few genuine matches, so the widget isn't sparse.
 - `dbtype=both` mixes movies and TV shows in one widget.
 

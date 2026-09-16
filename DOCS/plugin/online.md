@@ -10,9 +10,11 @@ Fetch ratings, awards, and metadata from external APIs via plugin container.
 
 - [Overview](#overview)
 - [Usage](#usage)
+- [RunScript Trigger](#runscript-trigger)
 - [Two-Container Pattern](#two-container-pattern)
 - [Available Properties](#available-properties)
 - [Music Video Properties](#music-video-properties)
+- [Notes](#notes)
 
 ---
 
@@ -239,6 +241,22 @@ Properties via `Container(ID).ListItem.Property(...)`
 | `Awards.Other.Wins` | Other wins |
 | `Awards.Other.Nominations` | Other nominations |
 
+#### Awards (MDBList)
+
+MDBList tags whether a title won or was nominated, never how many times. These sit alongside the
+counts above, which come from OMDb. Each is `"true"` when it applies and absent otherwise.
+
+| Property | Description |
+|----------|-------------|
+| `Awards.Oscar.Won` / `Awards.Oscar.Nominated` | Academy Award |
+| `Awards.BestPicture.Won` / `Awards.BestPicture.Nominated` | Best Picture |
+| `Awards.BestDirector.Won` / `Awards.BestDirector.Nominated` | Best Director |
+| `Awards.GoldenGlobe.Won` / `Awards.GoldenGlobe.Nominated` | Golden Globe |
+| `Awards.Razzie.Won` / `Awards.Razzie.Nominated` | Golden Raspberry |
+| `Awards.Emmy.Nominated` | Emmy |
+| `Awards.Festival.Cannes` / `.Venice` / `.Sundance` / `.Toronto` | Festival top prize |
+| `Awards.FilmRegistry` | US National Film Registry |
+
 ### MDBList Properties
 
 | Property | Description |
@@ -252,6 +270,7 @@ Properties via `Container(ID).ListItem.Property(...)`
 |----------|--------|-------------|
 | `Tomatometer` | "Certified", "Fresh", "Rotten" | Critics status |
 | `Popcornmeter` | "Hot", "Fresh", "Spilled" | Audience status |
+| `Metacritic` | "MustSee" | Metacritic Must-See (MDBList) |
 
 ### Common Sense Media
 
@@ -281,6 +300,7 @@ Each source provides three properties:
 | `Rating.{source}` | Rating (0-10) |
 | `Rating.{source}.Votes` | Vote count |
 | `Rating.{source}.Percent` | Percentage (0-100) |
+| `Rating.{source}.Stars` | Roger Ebert and Letterboxd only, their own number out of 4 and 5 |
 
 **Available Sources:**
 

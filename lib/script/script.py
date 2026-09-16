@@ -3,8 +3,7 @@ import sys
 import xbmc
 from typing import Callable, Dict, Optional
 from lib.kodi.client import log
-from lib.kodi.utilities import set_prop, clear_prop, resolve_infolabel
-from lib.infrastructure.dialogs import DialogProgress
+from lib.kodi.utilities import set_prop, clear_prop, resolve_infolabel, normalize_dbtype
 
 
 def _set_window_prop(key: str, value: str, window: str) -> None:
@@ -25,7 +24,7 @@ def _clear_window_prop(key: str, window: str) -> None:
 
 
 def _clear_blur_properties(blur_key: str, orig_key: str, window: str) -> None:
-    """Clear both blur properties on `window`."""
+    """Clear both blur properties on the target window."""
     _clear_window_prop(blur_key, window)
     _clear_window_prop(orig_key, window)
 
@@ -33,8 +32,8 @@ def _clear_blur_properties(blur_key: str, orig_key: str, window: str) -> None:
 def _blur_image_and_set_property(source: str, prefix: str = "",
                                  radius: Optional[int] = None,
                                  window: str = "home") -> None:
-    """Blur `source` and set `SkinInfo.[prefix.]BlurredImage`/`.Original` on `window`;
-    empty `source` clears them."""
+    """Blur an image into `SkinInfo.[prefix.]BlurredImage`/`.Original`; an empty source
+    clears them."""
     prop_base = f"SkinInfo.{prefix}." if prefix else "SkinInfo."
     blur_key = f"{prop_base}BlurredImage"
     orig_key = f"{prop_base}BlurredImage.Original"
@@ -203,13 +202,17 @@ def _handle_reset_setting(args: dict) -> None:
 
 
 def _handle_update_library_ratings(args: dict) -> None:
+    from lib.infrastructure import tasks as task_manager
     from lib.rating.menu import initialize_sources
     from lib.rating.updater import update_library_ratings
     media_type = args.get('dbtype', 'movie').lower()
     if media_type not in ("movie", "tvshow", "episode"):
         media_type = "movie"
     use_background = args.get('background', 'true').lower() == 'true'
-    update_library_ratings(media_type, initialize_sources(), use_background=use_background)
+    if not task_manager.acquire_task_slot("Update Library Ratings", use_background):
+        return
+    update_library_ratings(
+        media_type, initialize_sources(), use_background=use_background)
 
 
 def _handle_sync_tvshows(_args: dict) -> None:
@@ -232,9 +235,14 @@ def _handle_tools(_args: dict) -> None:
     run_tools()
 
 
+def _handle_update_top250(_args: dict) -> None:
+    from lib.script.top250 import run_top250_update
+    run_top250_update()
+
+
 def _handle_review_artwork(args: dict) -> None:
     from lib.artwork.manager import run_art_fetcher_single
-    run_art_fetcher_single(args.get('dbid'), args.get('dbtype'))
+    run_art_fetcher_single(args.get('dbid'), args.get('dbtype'), args.get('art_type'))
 
 
 def _handle_download_artwork(args: dict) -> None:
@@ -263,7 +271,7 @@ def _handle_export_nfo(args: dict) -> None:
     if not dbid or dbid == "-1" or not dbtype:
         return
 
-    wrote = write_nfo(dbtype.lower(), int(dbid), forced=True)
+    wrote = write_nfo(normalize_dbtype(dbtype), int(dbid), forced=True)
     if wrote:
         show_notification(ADDON.getLocalizedString(32029), ADDON.getLocalizedString(32030),
                           xbmcgui.NOTIFICATION_INFO, 3000)
@@ -412,6 +420,7 @@ def _handle_search_library_person(args: dict) -> None:
     import urllib.parse
     import xbmcgui
     from lib.kodi.client import request
+    from lib.infrastructure.dialogs import DialogProgress
 
     name = urllib.parse.unquote(args.get('name', ''))
     crew = args.get('crew', '')
@@ -547,7 +556,7 @@ def _handle_search_library_person(args: dict) -> None:
 
 
 def _handle_online_fetch(args: dict) -> None:
-    from lib.service.online import fetch_all_online_data
+    from lib.service.online.fetchers import fetch_all_online_data
     from lib.kodi.client import get_item_details
     from lib.data.api.tmdb import ApiTmdb
     from lib.data.database._infrastructure import init_database
@@ -821,6 +830,7 @@ _HANDLERS: Dict[str, Callable[[dict], None]] = {
     "playall": _handle_playall,
     "playrandom": _handle_playrandom,
     "tools": _handle_tools,
+    "update_top250": _handle_update_top250,
     "review_artwork": _handle_review_artwork,
     "download_artwork": _handle_download_artwork,
     "update_ratings": _handle_update_ratings,

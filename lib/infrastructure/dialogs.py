@@ -1,11 +1,20 @@
 """Dialog helper utilities for progress tracking and user interaction."""
 from __future__ import annotations
 
+import threading
 from typing import Optional, Union
 import xbmc
 import xbmcgui
 
-_MONITOR = xbmc.Monitor()
+_MONITOR: Optional[xbmc.Monitor] = None
+
+
+def _shutdown_monitor() -> xbmc.Monitor:
+    """Shared monitor behind `DialogProgress.iscanceled()`'s shutdown check."""
+    global _MONITOR
+    if _MONITOR is None:
+        _MONITOR = xbmc.Monitor()
+    return _MONITOR
 
 
 class DialogProgress(xbmcgui.DialogProgress):
@@ -17,7 +26,7 @@ class DialogProgress(xbmcgui.DialogProgress):
 
     def iscanceled(self) -> bool:
         """True if the user cancelled or Kodi is shutting down."""
-        return _MONITOR.abortRequested() or super().iscanceled()
+        return _shutdown_monitor().abortRequested() or super().iscanceled()
 
 
 class ProgressDialog:
@@ -150,6 +159,17 @@ def show_notification(
     xbmcgui.Dialog().notification(heading, message, icon, duration)
 
 
+def notify_when_idle(heading: str, message: str, monitor: xbmc.Monitor,
+                     abort: Optional[threading.Event] = None) -> None:
+    """Show a notification, holding it back until video playback stops."""
+    while xbmc.getCondVisibility("Player.HasVideo"):
+        if monitor.waitForAbort(30):
+            return
+        if abort is not None and abort.is_set():
+            return
+    show_notification(heading, message)
+
+
 def show_ok(heading: str, message: str) -> None:
     """Show OK dialog."""
     xbmcgui.Dialog().ok(heading, message)
@@ -182,9 +202,9 @@ def show_yesnocustom(heading: str, message: str, customlabel: str,
     )
 
 
-def show_textviewer(heading: str, text: str) -> None:
-    """Show text viewer dialog."""
-    xbmcgui.Dialog().textviewer(heading, text)
+def show_textviewer(heading: str, text: str, use_mono: bool = False) -> None:
+    """Show text viewer dialog. `use_mono` for reports whose columns or rules need to line up."""
+    xbmcgui.Dialog().textviewer(heading, text, usemono=use_mono)
 
 
 def show_select(
@@ -194,5 +214,3 @@ def show_select(
 ) -> int:
     """Show select dialog."""
     return xbmcgui.Dialog().select(heading, options, preselect=preselect)  # type: ignore[arg-type]
-
-
