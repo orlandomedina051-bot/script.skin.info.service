@@ -22,6 +22,10 @@ msgctxt "#32000"
 msgid "Animated Art"
 msgstr ""
 
+msgctxt "#32001"
+msgid "Key was not saved, please try again"
+msgstr ""
+
 msgctxt "#32002"
 msgid "Gif filename patterns (exact/suffix)"
 msgstr ""
@@ -32,6 +36,11 @@ msgstr ""
 
 msgctxt "#32004"
 msgid "Artwork"
+msgstr ""
+
+#. Error shown when an edited rating is not a number in range; 7.3 is an example value
+msgctxt "#32005"
+msgid "Rating must be a number from 0 to 10, such as 7.3"
 msgstr ""
 
 #. Label for language dropdown in settings (used for both metadata and artwork language selection)
@@ -83,12 +92,22 @@ msgctxt "#32017"
 msgid "{0} episodes"
 msgstr ""
 
+#. Error shown when an edited year falls outside the accepted range
+msgctxt "#32018"
+msgid "Year must be between 1800 and 2100"
+msgstr ""
+
 msgctxt "#32019"
 msgid "Add 'Download' option to missing artwork and pre-cache"
 msgstr ""
 
 msgctxt "#32020"
 msgid "Show additional menu options to download artwork to filesystem during review and pre-cache operations"
+msgstr ""
+
+#. Error shown when an edited runtime is not a whole number of minutes in range
+msgctxt "#32021"
+msgid "Runtime must be 0 to 10080 minutes"
 msgstr ""
 
 msgctxt "#32022"
@@ -105,6 +124,11 @@ msgstr ""
 
 msgctxt "#32025"
 msgid "Overwrite existing file"
+msgstr ""
+
+#. Error shown when an edited Top 250 position falls outside the accepted range
+msgctxt "#32026"
+msgid "Top 250 must be 0-250"
 msgstr ""
 
 msgctxt "#32027"
@@ -133,6 +157,11 @@ msgstr ""
 
 msgctxt "#32033"
 msgid "Art Fetcher - Cancelled"
+msgstr ""
+
+#. Error shown when an edited duration is not a MM:SS time
+msgctxt "#32034"
+msgid "Duration must be in MM:SS format"
 msgstr ""
 
 msgctxt "#32035"
@@ -171,12 +200,12 @@ msgctxt "#32043"
 msgid "No valid media types to download."
 msgstr ""
 
-msgctxt "#32045"
-msgid "Downloaded:"
-msgstr ""
-
 msgctxt "#32044"
 msgid "API Keys"
+msgstr ""
+
+msgctxt "#32045"
+msgid "Downloaded:"
 msgstr ""
 
 msgctxt "#32046"
@@ -920,6 +949,38 @@ msgctxt "#32320"
 msgid "IMDb ratings up to date"
 msgstr ""
 
+msgctxt "#32321"
+msgid "{0} rate limited, resuming in {1}s"
+msgstr ""
+
+msgctxt "#32323"
+msgid "Stopped: no sources reachable"
+msgstr ""
+
+msgctxt "#32324"
+msgid "Trakt will fetch {0} movies."
+msgstr ""
+
+msgctxt "#32325"
+msgid "Trakt will fetch {0} seasons."
+msgstr ""
+
+msgctxt "#32326"
+msgid "Trakt will fetch {0} shows."
+msgstr ""
+
+msgctxt "#32327"
+msgid "Trakt allows 500 requests every 5 minutes."
+msgstr ""
+
+msgctxt "#32328"
+msgid "Include Trakt in this update?"
+msgstr ""
+
+msgctxt "#32329"
+msgid "Include"
+msgstr ""
+
 msgctxt "#32330"
 msgid "Analyzing Textures"
 msgstr ""
@@ -965,11 +1026,11 @@ msgid "Analyzing library..."
 msgstr ""
 
 msgctxt "#32354"
-msgid "Downloading episode data..."
+msgid "Downloading IMDb episode data..."
 msgstr ""
 
 msgctxt "#32355"
-msgid "Matching episodes (dataset)... {0}/{1}"
+msgid "Matching episodes (IMDb dataset)... {0}/{1}"
 msgstr ""
 
 msgctxt "#32356"
@@ -1639,6 +1700,10 @@ msgctxt "#32594"
 msgid "Scan complete! Found: {0} | Cached: {1} | Existing: {2}"
 msgstr ""
 
+msgctxt "#32595"
+msgid "Automatically update IMDb Top 250 rankings in your library"
+msgstr ""
+
 msgctxt "#32600"
 msgid "IMDb Top 250"
 msgstr ""
@@ -1982,6 +2047,51 @@ msgctxt "#32684"
 msgid "Crew"
 msgstr ""
 
+msgctxt "#32685"
+msgid "Next Up (Favourites)"
+msgstr ""
+
+msgctxt "#32686"
+msgid "Recent Videos"
+msgstr ""
+
+msgctxt "#32687"
+msgid "Favourite Movies"
+msgstr ""
+
+msgctxt "#32688"
+msgid "Favourite TV Shows"
+msgstr ""
+
+msgctxt "#32689"
+msgid "Favourite Episodes"
+msgstr ""
+
+msgctxt "#32690"
+msgid "Favourite Music Videos"
+msgstr ""
+
+msgctxt "#32691"
+msgid "Music video thumb source"
+msgstr ""
+
+#. Options for which image fills an empty music video thumb during automatic fetching
+msgctxt "#32692"
+msgid "Video screenshots"
+msgstr ""
+
+msgctxt "#32693"
+msgid "Album cover"
+msgstr ""
+
+msgctxt "#32694"
+msgid "Artist thumb"
+msgstr ""
+
+msgctxt "#32695"
+msgid "Ratings sources to check (IMDb always on)"
+msgstr ""
+
 msgctxt "#32901"
 msgid "Enable Debug Output"
 msgstr ""
@@ -2068,6 +2178,10 @@ msgstr ""
 
 msgctxt "#32964"
 msgid "Clearart"
+msgstr ""
+
+msgctxt "#32965"
+msgid "Thumb"
 msgstr ""
 
 msgctxt "#32966"

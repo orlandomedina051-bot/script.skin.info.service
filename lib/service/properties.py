@@ -6,13 +6,12 @@ from __future__ import annotations
 
 from typing import Any, Optional, List, Tuple, Dict, Set
 import os
-import urllib.request
 import xbmc
 
 from lib.kodi.utilities import (
     clear_prop, clear_group, batch_set_props, format_date, extract_cast_names, MULTI_VALUE_SEP
 )
-from lib.kodi.formatters import format_number, RATING_SOURCE_NORMALIZE
+from lib.kodi.formatters import format_number, format_stars, RATING_SOURCE_NORMALIZE
 
 
 def _scale_rating(val: Any, max_val: Any) -> Optional[Tuple[float, int]]:
@@ -45,15 +44,38 @@ _ASPECT_TABLE = [
 ]
 
 
+_AUDIO_CODEC_PRIORITY = {
+    "flac": 7, "truehd": 6, "dtshd_ma": 5, "dtshd_hra": 4, "eac3": 3, "dca": 2, "ac3": 1,
+}
+
+
+def _best_video(streams: list) -> Optional[dict]:
+    """The stream Kodi reports on: the most pixels, first one winning a tie."""
+    return max(streams, default=None,
+               key=lambda v: int(v.get("width") or 0) * int(v.get("height") or 0))
+
+
+def _best_audio(streams: list) -> Optional[dict]:
+    """The stream Kodi reports on: most channels, then codec quality."""
+    return max(streams, default=None,
+               key=lambda a: (int(a.get("channels") or 0),
+                              _AUDIO_CODEC_PRIORITY.get((a.get("codec") or "").lower(), 0)))
+
+
 def media_streamdetails(filename: str, streamdetails: dict) -> Dict[str, str]:
     info: Dict[str, str] = {}
     video = streamdetails.get("video") or []
     audio = streamdetails.get("audio") or []
+    subtitle = streamdetails.get("subtitle") or []
     name = (filename or "").lower()
 
-    v0 = video[0] if video else None
+    v0 = _best_video(video)
 
-    if xbmc.getCondVisibility("ListItem.IsStereoscopic"):
+    # Piers carries stereomode per stream; on Omega only the focused item's InfoLabel exists
+    stereo = v0.get("stereomode") if v0 and "stereomode" in v0 \
+        else xbmc.getInfoLabel("ListItem.StereoscopicMode")
+
+    if (stereo or "mono") != "mono":
         info["videoresolution"] = "3d"
     elif v0:
         w = int(v0.get("width", 0) or 0)
@@ -76,6 +98,10 @@ def media_streamdetails(filename: str, streamdetails: dict) -> Dict[str, str]:
     else:
         info["videoresolution"] = "1080"
 
+    info["hdrtype"] = (v0.get("hdrtype") or "") if v0 else ""
+    info["subtitlelanguage"] = (subtitle[0].get("language") or "") if subtitle else ""
+    info["subtitlecount"] = str(len(subtitle))
+
     if v0:
         aspect = float(v0.get("aspect", 0) or 0)
         info["videocodec"] = v0.get("codec", "") or ""
@@ -87,14 +113,16 @@ def media_streamdetails(filename: str, streamdetails: dict) -> Dict[str, str]:
         info["videocodec"] = ""
         info["videoaspect"] = ""
 
-    if audio:
-        a0 = audio[0]
+    a0 = _best_audio(audio)
+    if a0:
         info["audiocodec"] = a0.get("codec", "") or ""
         ch = a0.get("channels", "")
         info["audiochannels"] = "" if ch is None else str(ch)
+        info["audiolanguage"] = a0.get("language", "") or ""
     else:
         info["audiocodec"] = ""
         info["audiochannels"] = ""
+        info["audiolanguage"] = ""
 
     return info
 
@@ -108,10 +136,12 @@ def media_path(path: Optional[str]) -> str:
         base = os.path.split(path)[0]
 
     if base.startswith("rar://"):
-        base = urllib.request.url2pathname(base[6:])
+        from urllib.request import url2pathname
+        base = url2pathname(base[6:])
     elif base.startswith("multipath://"):
+        from urllib.request import url2pathname
         parts = base[13:].split("%2f/")
-        base = urllib.request.url2pathname(parts[0])
+        base = url2pathname(parts[0])
     return base
 
 _STATE = {
@@ -296,6 +326,9 @@ def _build_listitem_unified_data(
             data[f"ListItem.Rating.{output_src}"] = str(scaled)
             data[f"ListItem.Rating.{output_src}.Votes"] = format_number(info.get("votes"))
             data[f"ListItem.Rating.{output_src}.Percent"] = str(pct)
+            stars = format_stars(output_src, scaled)
+            if stars:
+                data[f"ListItem.Rating.{output_src}.Stars"] = stars
 
     return data
 
@@ -306,7 +339,8 @@ def set_listitem_unified_properties(data: dict) -> None:
 
     current_sources: Set[str] = set()
     for key in data:
-        if key.startswith("ListItem.Rating.") and not key.endswith((".Votes", ".Percent")):
+        if key.startswith("ListItem.Rating.") and not key.endswith(
+                (".Votes", ".Percent", ".Stars")):
             parts = key.split(".")
             if len(parts) >= 3:
                 src = parts[2]
@@ -320,6 +354,7 @@ def set_listitem_unified_properties(data: dict) -> None:
         props[f"SkinInfo.ListItem.Rating.{src}"] = ""
         props[f"SkinInfo.ListItem.Rating.{src}.Votes"] = ""
         props[f"SkinInfo.ListItem.Rating.{src}.Percent"] = ""
+        props[f"SkinInfo.ListItem.Rating.{src}.Stars"] = ""
 
     batch_set_props(props)
     _LISTITEM_RATING_STATE = current_sources
@@ -457,6 +492,10 @@ def build_movie_data(details: dict) -> dict:
     data["Aspect"] = info.get("videoaspect") or ""
     data["AudioCodec"] = info.get("audiocodec") or ""
     data["AudioChannels"] = info.get("audiochannels") or ""
+    data["AudioLanguage"] = info.get("audiolanguage") or ""
+    data["HDRType"] = info.get("hdrtype") or ""
+    data["SubtitleLanguage"] = info.get("subtitlelanguage") or ""
+    data["SubtitleCount"] = info.get("subtitlecount") or ""
 
     _studios = details.get("studio")
     primary_studio = _first_or_empty(_studios)
@@ -582,6 +621,7 @@ def build_movieset_data(set_details: dict, movies: List[dict]) -> dict:
         data[f"Movie.{idx}.Year"] = str(year) if year is not None else ""
         data[f"Movie.{idx}.Runtime"] = str(duration_min) if duration_min else ""
         data[f"Movie.{idx}.VideoResolution"] = info.get("videoresolution") or ""
+        data[f"Movie.{idx}.HDRType"] = info.get("hdrtype") or ""
         data[f"Movie.{idx}.MPAA"] = m.get("mpaa") or ""
         data[f"Movie.{idx}.Genre"] = join_multi(m.get("genre"))
         data[f"Movie.{idx}.Director"] = join_multi(m.get("director"))
@@ -971,6 +1011,9 @@ def set_ratings_properties(item: dict, media_type: str = "Movie") -> None:
         props[f"{prefix}.{output_src}"] = str(scaled)
         props[f"{prefix}.{output_src}.Votes"] = format_number(info.get("votes"))
         props[f"{prefix}.{output_src}.Percent"] = str(pct)
+        stars = format_stars(output_src, scaled)
+        if stars:
+            props[f"{prefix}.{output_src}.Stars"] = stars
 
     prev_sources = _RATING_STATE.get(media_type, set())
     removed_sources = prev_sources - current_sources
@@ -978,6 +1021,7 @@ def set_ratings_properties(item: dict, media_type: str = "Movie") -> None:
         props[f"{prefix}.{src}"] = ""
         props[f"{prefix}.{src}.Votes"] = ""
         props[f"{prefix}.{src}.Percent"] = ""
+        props[f"{prefix}.{src}.Stars"] = ""
 
     if not ratings:
         props[prefix] = ""
@@ -1178,6 +1222,10 @@ def build_episode_data(details: dict) -> dict:
     data["Aspect"] = info.get("videoaspect") or ""
     data["AudioCodec"] = info.get("audiocodec") or ""
     data["AudioChannels"] = info.get("audiochannels") or ""
+    data["AudioLanguage"] = info.get("audiolanguage") or ""
+    data["HDRType"] = info.get("hdrtype") or ""
+    data["SubtitleLanguage"] = info.get("subtitlelanguage") or ""
+    data["SubtitleCount"] = info.get("subtitlecount") or ""
 
     data["LastPlayed"] = format_date(details.get("lastplayed") or "", include_time=False)
     data["TVShowID"] = str(tvshowid) if tvshowid else ""
@@ -1273,6 +1321,10 @@ def build_musicvideo_data(details: dict) -> dict:
     data["Aspect"] = info.get("videoaspect") or ""
     data["AudioCodec"] = info.get("audiocodec") or ""
     data["AudioChannels"] = info.get("audiochannels") or ""
+    data["AudioLanguage"] = info.get("audiolanguage") or ""
+    data["HDRType"] = info.get("hdrtype") or ""
+    data["SubtitleLanguage"] = info.get("subtitlelanguage") or ""
+    data["SubtitleCount"] = info.get("subtitlecount") or ""
 
     _artists = details.get("artist")
     primary_artist = _first_or_empty(_artists)
@@ -1329,5 +1381,3 @@ def set_musicvideo_properties(details: dict) -> None:
         userrating=details.get("userrating"),
     )
     set_listitem_unified_properties(unified)
-
-

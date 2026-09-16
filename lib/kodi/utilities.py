@@ -1,20 +1,20 @@
-"""Utility functions for properties, date formatting, and language handling.
+"""Utility functions for properties, settings, date formatting, and language handling.
 
 `set_prop`/`batch_set_props`/`clear_prop`/`clear_group` cache-diff writes to the home window
 only. Route any property also written by the service through these to avoid cache desync.
 """
 from __future__ import annotations
 
+import re
 import threading
 import time
 import xbmc
 import xbmcgui
 from typing import Any, Dict, Optional, List, Tuple
-from datetime import datetime
 from collections import OrderedDict
 
 from lib.kodi.settings import KodiSettings
-from lib.kodi.client import log, request
+from lib.kodi.client import ADDON, log, request
 HOME = xbmcgui.Window(10000)
 
 MEDIA_TYPE_LABELS = {
@@ -77,10 +77,18 @@ class _TransitionGate:
 
 _transition_gate = _TransitionGate()
 
+WINDOW_INVALID = 9999
+
 
 def gui_transition_settled() -> bool:
     """False while a window/dialog transition is in flight; gates off-thread ListItem reads."""
     return _transition_gate.settled()
+
+
+def modal_dialog_active() -> bool:
+    """True while a modal dialog is on top, where ListItem.* answers from that dialog's own list
+    instead of the underlying window."""
+    return xbmcgui.getCurrentWindowDialogId() != WINDOW_INVALID
 
 
 def parse_pipe_list(value: str, separator: str = '|') -> list:
@@ -118,6 +126,34 @@ DEFAULT_LANGUAGE = 'en'
 
 # Kodi's join separator for multi-value strings (genres, directors, cast).
 MULTI_VALUE_SEP = " / "
+
+
+_CERT_RATED = re.compile(r'^rated\s*:?\s*', re.IGNORECASE)
+_CERT_COUNTRY = re.compile(r'^([A-Za-z ]{1,20})[:/](.*)$')
+_CERT_COUNTRY_ALIAS = {
+    'USA': 'US', 'UNITED KINGDOM': 'UK', 'DENMARK': 'DK', 'GERMANY': 'DE', 'FRANCE': 'FR',
+    'BRAZIL': 'BR', 'AUSTRALIA': 'AU', 'NETHERLANDS': 'NL', 'GREECE': 'GR',
+}
+
+
+def normalize_dbtype(value: Optional[str]) -> str:
+    """Normalize a media type to lowercase; Kodi stores what an add-on set, verbatim."""
+    return (value or "").lower()
+
+
+def normalize_certificate(value: Optional[str]) -> Tuple[str, str]:
+    """Normalize a certificate to `(country, rating)` for comparison; an empty rating never
+    matches, and countries must agree so `NL:16` stays distinct from `GR:16`."""
+    text = _CERT_RATED.sub('', (value or '').strip()).strip().upper()
+    if not text:
+        return '', ''
+
+    match = _CERT_COUNTRY.match(text)
+    if not match:
+        return '', ' '.join(text.split())
+
+    country = ' '.join(match.group(1).split())
+    return _CERT_COUNTRY_ALIAS.get(country, country), ' '.join(match.group(2).lstrip('-').split())
 
 
 def normalize_language_tag(value: Optional[str]) -> str:
@@ -256,11 +292,23 @@ def extract_media_ids(item: dict) -> Dict[str, Optional[str]]:
     }
 
 
+def setting_float(key: str) -> float:
+    """Read a numeric addon setting uncached, treating unset or unparseable as 0.0."""
+    stored = ADDON.getSetting(key)
+    if stored:
+        try:
+            return float(stored)
+        except (ValueError, TypeError):
+            pass
+    return 0.0
+
+
 def format_date(date_str: str, include_time: bool = False) -> str:
     """Reformat an ISO date/datetime into Kodi's region-configured format."""
     if not date_str:
         return ""
 
+    from datetime import datetime
     try:
         if " " in date_str:
             dt = datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S")
@@ -299,6 +347,11 @@ def kodi_build_version() -> str:
     if not _build_version:
         _build_version = xbmc.getInfoLabel("System.BuildVersionCode") or ""
     return _build_version
+
+
+def skin_bool(setting: str) -> bool:
+    """True when a skin bool is set."""
+    return xbmc.getCondVisibility(f"Skin.HasSetting({setting})")
 
 
 def is_kodi_piers_or_later() -> bool:

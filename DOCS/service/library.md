@@ -89,6 +89,7 @@ Clock-formatted counterpart to `Runtime`. `m:ss` under an hour, `h:mm:ss` at an 
 | `Rating.{source}` | Rating from specific source | Movie, TVShow, Episode |
 | `Rating.{source}.Votes` | Vote count for source | Movie, TVShow, Episode |
 | `Rating.{source}.Percent` | Source rating as percentage | Movie, TVShow, Episode |
+| `Rating.{source}.Stars` | Roger Ebert and Letterboxd, out of 4 and 5 | Movie, TVShow, Episode |
 | `Tomatometer` | "Fresh" or "Rotten" (based on ≥60%) | Movie, TVShow |
 | `Popcornmeter` | "Fresh" or "Spilled" (based on ≥60%) | Movie, TVShow |
 
@@ -181,6 +182,10 @@ Clock-formatted counterpart to `Runtime`. `m:ss` under an hour, `h:mm:ss` at an 
 | `Aspect` | Aspect ratio (1.33, 1.78, 2.35, etc.) |
 | `AudioCodec` | Audio codec |
 | `AudioChannels` | Audio channel count |
+| `AudioLanguage` | Language of the audio track shown |
+| `HDRType` | `dolbyvision`, `hdr10`, `hdr10plus`, `hlg`, or empty |
+| `SubtitleLanguage` | Language of the first subtitle track |
+| `SubtitleCount` | Number of subtitle tracks |
 
 ### Artwork
 
@@ -202,6 +207,7 @@ Clock-formatted counterpart to `Runtime`. `m:ss` under an hour, `h:mm:ss` at an 
 | `Rating.{source}` | Scaled rating (0-10) |
 | `Rating.{source}.Votes` | Vote count |
 | `Rating.{source}.Percent` | Percentage (0-100) |
+| `Rating.{source}.Stars` | Roger Ebert and Letterboxd, out of 4 and 5 |
 | `Tomatometer` | "Fresh" or "Rotten" (based on ≥60%) |
 | `Popcornmeter` | "Fresh" or "Spilled" (based on ≥60%) |
 
@@ -303,6 +309,7 @@ Use `%d` as placeholder for index (1-based):
 | `Movie.%d.StudioPrimary` | First studio only |
 | `Movie.%d.Country` | Country(ies) |
 | `Movie.%d.VideoResolution` | Video resolution |
+| `Movie.%d.HDRType` | `dolbyvision`, `hdr10`, `hdr10plus`, `hlg`, or empty |
 | `Movie.%d.MPAA` | Content rating |
 | `Movie.%d.Art(poster)` | Poster |
 | `Movie.%d.Art(fanart)` | Fanart |
@@ -486,6 +493,10 @@ Use `%d` as placeholder for index (1-based):
 | `Aspect` | Aspect ratio |
 | `AudioCodec` | Audio codec |
 | `AudioChannels` | Audio channel count |
+| `AudioLanguage` | Language of the audio track shown |
+| `HDRType` | `dolbyvision`, `hdr10`, `hdr10plus`, `hlg`, or empty |
+| `SubtitleLanguage` | Language of the first subtitle track |
+| `SubtitleCount` | Number of subtitle tracks |
 
 ### Artwork
 
@@ -555,6 +566,10 @@ Use `%d` as placeholder for index (1-based):
 | `Aspect` | Aspect ratio |
 | `AudioCodec` | Audio codec |
 | `AudioChannels` | Audio channel count |
+| `AudioLanguage` | Language of the audio track shown |
+| `HDRType` | `dolbyvision`, `hdr10`, `hdr10plus`, `hlg`, or empty |
+| `SubtitleLanguage` | Language of the first subtitle track |
+| `SubtitleCount` | Number of subtitle tracks |
 
 ### Artwork
 

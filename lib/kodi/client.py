@@ -1,11 +1,9 @@
 """Kodi JSON-RPC interface with caching and rate limiting."""
 from __future__ import annotations
 
-import json
-from typing import Any, Dict, Optional, Tuple, List, Callable, overload
+from typing import Any, Dict, NamedTuple, Optional, Tuple, List, Callable, overload
 from time import monotonic
 import threading
-import urllib.parse
 
 import xbmc
 import xbmcaddon
@@ -20,11 +18,8 @@ CACHE_CLEANUP_INTERVAL = 60
 CACHE_CLEANUP_REQUEST_INTERVAL = 50
 CACHE_MAX_SIZE = 200
 
-from dataclasses import dataclass
 
-
-@dataclass(frozen=True)
-class MediaTypeSpec:
+class MediaTypeSpec(NamedTuple):
     """Per-media-type Kodi JSON-RPC bindings; source of truth for the `KODI_*_METHODS`/
     `KODI_ID_KEYS` dicts."""
     get_method: str
@@ -94,10 +89,8 @@ _CACHE_LOCK = threading.Lock()
 
 
 def _cleanup_expired_cache(force: bool = False) -> None:
-    """Evict expired entries and trim cache to `CACHE_MAX_SIZE`.
-
-    No-op unless one of the cleanup triggers (time, request count, size) fires, or `force=True`.
-    """
+    """Evict expired entries, then least-recently-used ones down to `CACHE_MAX_SIZE`; a no-op
+    unless a cleanup trigger (time, request count, size) fires or `force=True`."""
     global _last_cleanup, _request_count
     now = monotonic()
 
@@ -119,12 +112,15 @@ def _cleanup_expired_cache(force: bool = False) -> None:
         for k in expired:
             _L1.pop(k, None)
 
-        if len(_L1) > CACHE_MAX_SIZE:
-            import heapq
-            excess = len(_L1) - CACHE_MAX_SIZE
-            oldest_keys = heapq.nsmallest(excess, _L1.items(), key=lambda x: x[1][0])
-            for k, _ in oldest_keys:
-                _L1.pop(k, None)
+        while len(_L1) > CACHE_MAX_SIZE:
+            _L1.pop(next(iter(_L1)), None)
+
+
+def drop_cached(prefix: str) -> None:
+    """Forget every cached response under a key prefix, after Kodi wrote to that item."""
+    with _CACHE_LOCK:
+        for key in [k for k in _L1 if k.startswith(prefix)]:
+            _L1.pop(key, None)
 
 
 def get_cache_only(cache_key: str) -> Optional[dict]:
@@ -133,6 +129,9 @@ def get_cache_only(cache_key: str) -> Optional[dict]:
     with _CACHE_LOCK:
         ent = _L1.get(cache_key)
         if ent and ent[0] > now:
+            # a hit protects the entry from the capacity evict
+            del _L1[cache_key]
+            _L1[cache_key] = ent
             return ent[1]
     return None
 
@@ -144,10 +143,7 @@ def extract_result(resp: Optional[dict], result_key: str, default: dict) -> dict
 @overload
 def extract_result(resp: Optional[dict], result_key: str, default: None = None) -> Any: ...
 def extract_result(resp: Optional[dict], result_key: str, default=None):
-    """Extract `resp['result'][result_key]`.
-
-    `default=None` auto-picks `[]` for plural keys (ending in `s` except `details`), else `{}`.
-    """
+    """Extract `resp['result'][result_key]`, defaulting to the shape the key implies."""
     if default is None:
         default = [] if result_key.endswith("s") and result_key != "details" else {}
 
@@ -170,6 +166,7 @@ def _call_jsonrpc(payload: Any, error_context: str) -> Any:
 
     Returns None on transport, JSON, or shape errors.
     """
+    import json
     try:
         raw = xbmc.executeJSONRPC(json.dumps(payload, separators=(",", ":")))
     except (OSError, IOError) as e:
@@ -191,11 +188,7 @@ def _call_jsonrpc(payload: Any, error_context: str) -> Any:
 
 def request(method: str, params: Optional[Dict[str, Any]] = None,
             cache_key: Optional[str] = None, ttl_seconds: Optional[int] = None) -> Optional[dict]:
-    """Make a JSON-RPC request with optional in-memory caching.
-
-    `cache_key` enables read-through caching with `ttl_seconds` (default 30s).
-    Returns None on network, JSON, or JSON-RPC error.
-    """
+    """Make a JSON-RPC request with optional read-through caching; None on any error."""
     global _request_count
     ttl = CACHE_DEFAULT_TTL if ttl_seconds is None else max(1, int(ttl_seconds))
 
@@ -229,10 +222,9 @@ def request(method: str, params: Optional[Dict[str, Any]] = None,
         with _CACHE_LOCK:
             try:
                 result_only = data.get("result")
-                if result_only is not None:
-                    _L1[cache_key] = (monotonic() + float(ttl), {"result": result_only})
-                else:
-                    _L1[cache_key] = (monotonic() + float(ttl), data)
+                entry = {"result": result_only} if result_only is not None else data
+                _L1.pop(cache_key, None)
+                _L1[cache_key] = (monotonic() + float(ttl), entry)
             except Exception as e:
                 log(
                     "General",
@@ -314,10 +306,9 @@ def batch_request(calls: List[Dict[str, Any]],
             if key and "error" not in resp:
                 try:
                     result_only = resp.get("result")
-                    if result_only is not None:
-                        _L1[key] = (now + float(ttl), {"result": result_only})
-                    else:
-                        _L1[key] = (now + float(ttl), resp)
+                    entry = {"result": result_only} if result_only is not None else resp
+                    _L1.pop(key, None)
+                    _L1[key] = (now + float(ttl), entry)
                 except Exception as e:
                     log(
                         "General",
@@ -330,7 +321,7 @@ def batch_request(calls: List[Dict[str, Any]],
 
 def get_item_details(media_type: str, dbid: int, properties: List[str], cache_key: str = "",
                      ttl_seconds: Optional[int] = None, **extra_params: Any) -> Any:
-    """Fetch item details for `media_type` via the right `GetXDetails` method and result key."""
+    """Fetch item details via the right GetXDetails method and result key for the media type."""
     method_info = KODI_GET_DETAILS_METHODS.get(media_type)
     if not method_info:
         log("API", f"Unknown media type: {media_type}", xbmc.LOGERROR)
@@ -369,7 +360,8 @@ def decode_image_url(url: str) -> str:
     if '@' in inner:
         return url
 
-    return urllib.parse.unquote(inner)
+    from urllib.parse import unquote
+    return unquote(inner)
 
 
 def encode_image_url(decoded_url: str) -> str:
@@ -380,7 +372,8 @@ def encode_image_url(decoded_url: str) -> str:
     if decoded_url.startswith('image://'):
         return decoded_url
 
-    encoded = urllib.parse.quote(decoded_url, safe='')
+    from urllib.parse import quote
+    encoded = quote(decoded_url, safe='')
     return f'image://{encoded}/'
 
 
@@ -428,8 +421,9 @@ def get_library_items(media_types: List[str], properties: List[str], *,
                       filter_func: Optional[Callable[[Dict[str, Any]], bool]] = None,
                       progress_callback: Optional[Callable[[str, int, int], None]] = None,
                       abort_check: Optional[Callable[[], bool]] = None,
+                      sort: Optional[Dict[str, str]] = None,
                       page_size: int = 2000) -> List[Dict[str, Any]]:
-    """Fetch library items across `media_types`, optionally decoding art and folding in seasons."""
+    """Fetch library items, optionally decoding art and folding in seasons."""
     all_items: List[Dict[str, Any]] = []
 
     for media_type in media_types:
@@ -444,10 +438,13 @@ def get_library_items(media_types: List[str], properties: List[str], *,
         done = 0
 
         while True:
-            resp = request(method, {
+            params: Dict[str, Any] = {
                 "properties": properties,
                 "limits": {"start": start, "end": start + page_size},
-            })
+            }
+            if sort:
+                params["sort"] = sort
+            resp = request(method, params)
             if not resp:
                 log("General", f"Failed to fetch {media_type} from library", xbmc.LOGWARNING)
                 break
@@ -577,6 +574,7 @@ def get_api_key(key_id: str) -> Optional[str]:
             token_path = xbmcvfs.translatePath(f"special://profile/addon_data/script.skin.info.service/{token_file}")
             if xbmcvfs.exists(token_path):
                 try:
+                    import json
                     with open(token_path, 'r') as f:
                         tokens = json.load(f)
                         return tokens.get("access_token")
@@ -603,12 +601,19 @@ def _is_debug_enabled() -> bool:
     return _debug_enabled
 
 
-def log(category: str, message: str, level: int = xbmc.LOGDEBUG) -> None:
-    """Log `[category] message` at `level`, prefixed with the addon id.
+def format_item_label(item: Dict, media_type: str) -> str:
+    """Display label for an item; episodes get show title with SxxExx."""
+    if media_type == "episode":
+        showtitle = item.get("showtitle")
+        season = item.get("season")
+        episode = item.get("episode")
+        if showtitle and season is not None and episode is not None:
+            return f"{showtitle} S{int(season):02d}E{int(episode):02d}"
+    return item.get("title", "")
 
-    With the debug setting on, DEBUG escalates to INFO so skinners see diagnostics without
-    Kodi debug mode.
-    """
+
+def log(category: str, message: str, level: int = xbmc.LOGDEBUG) -> None:
+    """Log a categorized message; DEBUG escalates to INFO when the debug setting is on."""
     if level == xbmc.LOGDEBUG and _is_debug_enabled():
         level = xbmc.LOGINFO
     xbmc.log(f"script.skin.info.service: [{category}] {message}", level)

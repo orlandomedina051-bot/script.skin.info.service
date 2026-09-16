@@ -5,7 +5,6 @@ chain. Helpers that need those should live in their owning API module instead.
 """
 from __future__ import annotations
 
-from base64 import b64decode
 from typing import Optional
 
 
@@ -13,12 +12,8 @@ TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p"
 
 
 def decode_key(blob: str) -> str:
-    """Decode a base64-encoded built-in provider key.
-
-    Not security: the addon ships as source, so the value is recoverable at
-    runtime. Encoding only keeps keys out of cleartext per provider terms and
-    away from automated secret scanners.
-    """
+    """Decode a built-in provider key."""
+    from base64 import b64decode
     return b64decode(blob).decode("ascii")
 
 

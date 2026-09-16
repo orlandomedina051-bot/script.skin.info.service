@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import Dict, Optional
 
 import xbmc
-import xbmcgui
 
 from lib.info.dialogs.base import InfoDialogBase, ADDON_PATH
 from lib.kodi.client import log
@@ -88,10 +87,6 @@ class DialogVideoInfo(InfoDialogBase):
         for name, path in containers.items():
             self.setProperty(f"container.{name}.path", path)
 
-    def onAction(self, action: xbmcgui.Action) -> None:
-        if self.is_close_action(action):
-            self.close()
-
 
 def open_video_info(
     tmdb_id: str = '',
@@ -105,7 +100,7 @@ def open_video_info(
             log("General", "DialogVideoInfo: No tmdb_id or imdb_id", xbmc.LOGWARNING)
             return
 
-        from lib.service.online import fetch_all_online_data
+        from lib.service.online.fetchers import fetch_all_online_data
         online_props = fetch_all_online_data(
             media_type=media_type,
             imdb_id=imdb_id,

@@ -4,8 +4,9 @@ from __future__ import annotations
 import xbmc
 import xbmcgui
 
-from lib.kodi.client import ADDON
-from lib.infrastructure.dialogs import DialogProgress
+from lib.kodi.client import ADDON, log
+from lib.kodi.settings import KodiSettings
+from lib.infrastructure.dialogs import DialogProgress, show_notification
 
 
 def edit_api_key(provider: str) -> None:
@@ -35,6 +36,14 @@ def edit_api_key(provider: str) -> None:
         ADDON.setSetting(f"{provider}_configured", "true")
         ADDON.setSetting(f"{provider}_api_key_display", keyboard)
 
+        KodiSettings.clear_cache()
+
+        if ADDON.getSetting(config["setting_path"]) != keyboard:
+            log("API", f"{config['name']} key did not persist to {config['setting_path']}",
+                xbmc.LOGERROR)
+            show_notification(config['name'], ADDON.getLocalizedString(32001),
+                              xbmcgui.NOTIFICATION_ERROR, 5000)
+
 
 def clear_api_key(provider: str) -> None:
     """Clear API key after confirmation."""
@@ -59,6 +68,8 @@ def clear_api_key(provider: str) -> None:
         ADDON.setSetting(f"{provider}_configured", "false")
         ADDON.setSetting(f"{provider}_api_key_display", not_configured)
 
+        KodiSettings.clear_cache()
+
         xbmc.executebuiltin('Action(Up)')
 
 
@@ -68,6 +79,11 @@ def test_api_key(provider: str) -> None:
 
     config = API_KEY_CONFIG.get(f"{provider}_api_key")
     if not config:
+        return
+
+    if not ADDON.getSetting(config["setting_path"]):
+        show_notification(config['name'], ADDON.getLocalizedString(32065),
+                          xbmcgui.NOTIFICATION_INFO, 4000)
         return
 
     progress = DialogProgress()
@@ -265,5 +281,3 @@ def revoke_trakt_authorization() -> None:
         settings = ADDON.getSettings()
         settings.setString("trakt_configured", "false")
         ADDON.setSetting("trakt_configured", "false")
-
-

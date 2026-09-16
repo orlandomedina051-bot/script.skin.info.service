@@ -19,6 +19,7 @@ All actions use `action=name` or `dialog=type` syntax.
 
 ## Table of Contents
 
+- [RunScript Syntax](#runscript-syntax)
 - [Dialog Utilities](#dialog-utilities)
   - [dialog=yesno](#dialogyesno)
   - [dialog=yesnocustom](#dialogyesnocustom)
@@ -57,9 +58,11 @@ All actions use `action=name` or `dialog=type` syntax.
   - [Check File Exists](#check-file-exists)
 - [JSON-RPC Utilities](#json-rpc-utilities)
   - [JSON-RPC Wrapper](#json-rpc-wrapper)
+- [Automatic Refresh Properties](#automatic-refresh-properties)
 - [Search Utilities](#search-utilities)
   - [TMDB Search](#tmdb-search)
   - [Library Person Search](#library-person-search)
+- [Notes](#notes)
 
 ---
 
@@ -1558,6 +1561,8 @@ Auto-increment properties on fixed time intervals for periodic widget refresh.
 **RunScript:** `action=tmdb_search`
 
 Opens a keyboard for a search query, fetches matches from TMDB, and shows a picker dialog. Sets a Window property with a plugin URL pointing to the picked item's details, ready to bind to a container.
+
+The URL it sets is a [TMDB Details](plugin/dbid.md#tmdb-details) path, so the same listing is available for any TMDB ID you already have.
 
 Append `:YYYY` to the query to restrict by year (movies/TV only).
 

@@ -11,7 +11,10 @@ from lib.kodi.client import (
     request, get_cache_only, extract_result, get_item_details,
     KODI_MOVIE_PROPERTIES,
 )
-from lib.kodi.utilities import clear_group, gui_transition_settled, is_kodi_piers_or_later
+from lib.kodi.utilities import (
+    clear_group, gui_transition_settled, is_kodi_piers_or_later, modal_dialog_active,
+    normalize_dbtype,
+)
 from lib.service.properties import (
     set_artist_properties,
     set_album_properties,
@@ -118,16 +121,29 @@ def _resolve_season_runtime(tvshowid: int, season: int) -> int:
     return total
 
 
+_CONTAINER_CONTENT_TYPES = {
+    "sets": "set",
+    "movies": "movie",
+    "artists": "artist",
+    "albums": "album",
+    "tvshows": "tvshow",
+    "seasons": "season",
+    "episodes": "episode",
+    "musicvideos": "musicvideo",
+}
+
+
 class FocusDispatcher:
     """Reads `ListItem.DBID` each tick and dispatches to per-type detail setters.
 
-    Holds last-seen `(dbid, type)` to skip work when nothing changed.
+    Holds last-seen `(dbid, DBType)` to skip work when nothing changed.
     """
 
     def __init__(self, service: 'ServiceMain'):
         self._service = service
         self._last_id: Optional[str] = None
         self._last_type: Optional[str] = None
+        self._last_dbtype: Optional[str] = None
         self._last_asset_parent: Optional[str] = None
 
     def clear_media_type(self, media_type: str) -> None:
@@ -137,6 +153,13 @@ class FocusDispatcher:
             clear_group(prefix)
         if media_type == "season":
             clear_group(_MEDIA_TYPE_PREFIXES["tvshow"])
+
+    def invalidate_item(self, media_type: str, dbid) -> None:
+        """Drop the memo and the cached details for an item Kodi has just written to."""
+        from lib.kodi.client import drop_cached
+        drop_cached(f"{media_type}:{dbid}:")
+        if self._last_id == str(dbid):
+            self._last_id = None
 
     def invalidate_asset_view(self) -> None:
         """Force a refetch of extras aggregates on the next tick. Called from the
@@ -157,7 +180,7 @@ class FocusDispatcher:
             "Container.Content(videoversions) | Container.Content(videoextras)"
         )
         if not in_container:
-            if self._last_asset_parent is not None:
+            if self._last_asset_parent is not None and not modal_dialog_active():
                 set_movie_extras_aggregates(0, 0, 0, 0)
                 self._last_asset_parent = None
             return False
@@ -188,22 +211,29 @@ class FocusDispatcher:
             if in_asset_view:
                 self._service.blur.handle_focus()
                 return
+            if modal_dialog_active():
+                self._service.blur.handle_focus()
+                return
             if self._last_type:
                 self.clear_media_type(self._last_type)
                 clear_listitem_unified_properties()
                 self._last_type = ""
+                self._last_dbtype = None
                 self._last_id = None
             self._service.blur.handle_focus()
             return
 
-        dbtype = xbmc.getInfoLabel("ListItem.DBType") or ""
-        if dbid == self._last_id and dbtype and dbtype == self._last_type:
-            self._service.blur.handle_focus()
-            return
+        dbtype = normalize_dbtype(xbmc.getInfoLabel("ListItem.DBType"))
 
         mv_mediatype = ""
         if dbtype in ("actor", "album"):
             mv_mediatype = xbmc.getInfoLabel("ListItem.Property(musicvideomediatype)")
+
+        # one person is the same dbid+DBType in the actors and artists nodes; only this differs
+        identity = f"{dbtype}|{mv_mediatype}"
+        if dbid == self._last_id and self._last_type and identity == self._last_dbtype:
+            self._service.blur.handle_focus()
+            return
 
         if dbtype == "actor" and mv_mediatype == "artist":
             cur_type = "musicvideo_artist"
@@ -216,27 +246,10 @@ class FocusDispatcher:
         elif dbid == self._last_id and self._last_type:
             cur_type = self._last_type
         else:
-            is_set = xbmc.getCondVisibility(
-                "ListItem.IsCollection | String.IsEqual(ListItem.DBType,set)"
+            # Container.Content(x) is a case-insensitive compare against this label
+            cur_type = _CONTAINER_CONTENT_TYPES.get(
+                (xbmc.getInfoLabel("Container.Content") or "").lower(), ""
             )
-            if is_set or xbmc.getCondVisibility("Container.Content(sets)"):
-                cur_type = "set"
-            elif xbmc.getCondVisibility("Container.Content(movies)"):
-                cur_type = "movie"
-            elif xbmc.getCondVisibility("Container.Content(artists)"):
-                cur_type = "artist"
-            elif xbmc.getCondVisibility("Container.Content(albums)"):
-                cur_type = "album"
-            elif xbmc.getCondVisibility("Container.Content(tvshows)"):
-                cur_type = "tvshow"
-            elif xbmc.getCondVisibility("Container.Content(seasons)"):
-                cur_type = "season"
-            elif xbmc.getCondVisibility("Container.Content(episodes)"):
-                cur_type = "episode"
-            elif xbmc.getCondVisibility("Container.Content(musicvideos)"):
-                cur_type = "musicvideo"
-            else:
-                cur_type = ""
 
         if self._last_id and dbid != self._last_id:
             if self._last_type and self._last_type != cur_type:
@@ -301,6 +314,7 @@ class FocusDispatcher:
             self._last_id = dbid
             self._last_type = ""
 
+        self._last_dbtype = identity
         self._service.blur.handle_focus()
 
     def _set_movie(self, movieid: str) -> None:
@@ -451,4 +465,3 @@ class FocusDispatcher:
 
         set_episode_properties(details)
         set_ratings_properties(details, "Episode")
-

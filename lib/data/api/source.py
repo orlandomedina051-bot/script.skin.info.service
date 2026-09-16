@@ -5,7 +5,6 @@ from abc import ABC, abstractmethod
 from typing import Optional, Dict
 
 from lib.data.database.rating import get_provider_cache, save_provider_cache
-from lib.data.api.client import PauseReporter
 
 
 class RatingSource(ABC):
@@ -21,7 +20,6 @@ class RatingSource(ABC):
         ids: Dict[str, str],
         abort_flag=None,
         force_refresh: bool = False,
-        pause_reporter: Optional[PauseReporter] = None,
     ) -> Optional[Dict[str, Dict[str, float]]]:
         pass
 
@@ -29,13 +27,21 @@ class RatingSource(ABC):
     def test_connection(self) -> bool:
         pass
 
+    def supports(self, media_type: str) -> bool:
+        """Whether this source can return ratings for the media type at all."""
+        return True
+
     def normalize_rating(self, value: float, scale_max: int) -> float:
         if scale_max == 10:
             return round(float(value), 1)
         return round(float(value) / float(scale_max) * 10.0, 1)
 
-    def get_cached_data(self, media_id: str) -> Optional[dict]:
-        return get_provider_cache(self.provider_name, media_id)
+    def get_cached_data(self, media_type: str, media_id: str,
+                        season: int = -1, episode: int = -1) -> Optional[dict]:
+        return get_provider_cache(self.provider_name, media_type, media_id, season, episode)
 
-    def cache_data(self, media_id: str, data: dict, release_date: Optional[str] = None) -> None:
-        save_provider_cache(self.provider_name, media_id, data, release_date)
+    def cache_data(self, media_type: str, media_id: str, data: dict,
+                   release_date: Optional[str] = None,
+                   season: int = -1, episode: int = -1) -> None:
+        save_provider_cache(self.provider_name, media_type, media_id, data, release_date,
+                            season, episode)

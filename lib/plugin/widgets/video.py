@@ -1,13 +1,53 @@
 """Widget handlers for plugin content."""
 from __future__ import annotations
 
+import math
 import random
+import re
 from typing import Optional
 
 import xbmc
 import xbmcgui
 import xbmcplugin
-from lib.kodi.client import request, get_item_details, extract_result, ADDON
+from lib.kodi.client import request, batch_request, get_item_details, extract_result, ADDON
+
+_FAVOURITE_TVSHOW = re.compile(r'videodb://tvshows/titles/(\d+)')
+
+_EPISODE_PROPERTIES = ['title', 'season', 'episode', 'showtitle', 'plot', 'art', 'file',
+                       'resume', 'runtime', 'firstaired', 'rating', 'userrating',
+                       'playcount', 'lastplayed']
+
+_SHOW_PROPERTIES = ['title', 'mpaa', 'studio', 'episode', 'watchedepisodes']
+
+_FULL_SHOW_PROPERTIES = ['art', 'episode', 'watchedepisodes', 'title', 'plot', 'rating',
+                         'userrating', 'year', 'premiered', 'playcount', 'votes', 'genre',
+                         'studio', 'mpaa', 'cast', 'tag', 'dateadded', 'lastplayed',
+                         'imdbnumber', 'originaltitle', 'season']
+
+_MOVIE_PROPERTIES = ['title', 'art', 'file', 'year', 'rating', 'userrating', 'playcount',
+                     'plot', 'tagline', 'runtime', 'genre', 'director', 'studio', 'mpaa',
+                     'trailer', 'votes', 'tag', 'dateadded', 'lastplayed', 'resume']
+
+_RECENT_WINDOW = {'field': 'dateadded', 'operator': 'inthelast', 'value': '365 days'}
+
+_TAG_STOPLIST = frozenset({
+    'duringcreditsstinger', 'aftercreditsstinger', 'woman director', 'sequel', 'remake',
+    'based on novel or book', 'based on true story', 'based on comic',
+    'based on young adult novel', 'live action remake',
+    'amused', 'hilarious', 'suspenseful', 'absurd', 'awestruck', 'tense', 'fascinate',
+    'emotional', 'sentimental', 'uplifting', 'entertaining', 'excited', 'admiring',
+})
+
+_TAG_WEIGHT = 8.0
+_TAG_FULL_MATCH = 0.08
+_SAME_SET_PENALTY = 12.0
+_MAX_VOTE_LOG = math.log1p(1000000)
+
+_SIMILAR_MOVIE_SCORING = ['genre', 'year', 'mpaa', 'tag', 'director', 'writer', 'studio',
+                          'setid', 'rating', 'votes', 'playcount']
+
+_SIMILAR_SHOW_SCORING = ['genre', 'year', 'mpaa', 'tag', 'studio', 'rating', 'votes',
+                         'watchedepisodes']
 
 
 def _set_episode_artwork_from_show(listitem: xbmcgui.ListItem, show_art: dict,
@@ -25,81 +65,233 @@ def _set_episode_artwork_from_show(listitem: xbmcgui.ListItem, show_art: dict,
     })
 
 
+def _earliest_unwatched(tvshowid: int, season: Optional[int] = None) -> list:
+    """Lowest-numbered unwatched episode of a show, restricted to one season when given."""
+    params = {
+        'tvshowid': tvshowid,
+        'filter': {'field': 'playcount', 'operator': 'is', 'value': '0'},
+        'properties': _EPISODE_PROPERTIES,
+        'sort': {'method': 'episode', 'order': 'ascending'},
+        'limits': {'start': 0, 'end': 1}
+    }
+    if season is not None:
+        params['season'] = season
+    return extract_result(request('VideoLibrary.GetEpisodes', params), 'episodes', [])
+
+
+def _next_unwatched_episode(tvshowid: int) -> Optional[dict]:
+    """Episode to watch next: earliest unwatched in the season last played, else earliest
+    unwatched anywhere, so an untouched show starts at its first episode."""
+    last_result = request('VideoLibrary.GetEpisodes', {
+        'tvshowid': tvshowid,
+        'filter': {
+            'or': [
+                {'field': 'inprogress', 'operator': 'true', 'value': ''},
+                {'field': 'playcount', 'operator': 'greaterthan', 'value': '0'}
+            ]
+        },
+        'properties': ['season'],
+        'sort': {'method': 'lastplayed', 'order': 'descending'},
+        'limits': {'start': 0, 'end': 1}
+    })
+    last_played = extract_result(last_result, 'episodes', [])
+
+    if last_played:
+        episodes = _earliest_unwatched(tvshowid, last_played[0]['season'])
+        if episodes:
+            return episodes[0]
+
+    episodes = _earliest_unwatched(tvshowid)
+    return episodes[0] if episodes else None
+
+
+def _show_art_from_episode(episode_art: dict) -> dict:
+    """Parent show art, which Kodi mirrors onto every episode under `tvshow.*`."""
+    return {key[7:]: value for key, value in episode_art.items() if key.startswith('tvshow.')}
+
+
+def _episode_item_from_show(show: dict, episode: dict) -> xbmcgui.ListItem:
+    """Episode ListItem carrying the parent show's art, certificate and studio."""
+    listitem = _create_episode_listitem(episode)
+    episode_art = episode.get('art', {})
+    _set_episode_artwork_from_show(listitem, _show_art_from_episode(episode_art), episode_art)
+    video_tag = listitem.getVideoInfoTag()
+    if show.get('mpaa'):
+        video_tag.setMpaa(show['mpaa'])
+    if show.get('studio'):
+        video_tag.setStudios(show['studio'])
+    return listitem
+
+
 def handle_next_up(handle: int, params: dict) -> None:
     """Plugin entry: next unwatched episode per in-progress show (`limit`, default 25)."""
     limit = int(params.get('limit', ['25'])[0])
 
     result = request('VideoLibrary.GetTVShows', {
         'filter': {'field': 'inprogress', 'operator': 'true', 'value': ''},
-        'properties': ['art', 'title', 'mpaa', 'studio', 'episode', 'watchedepisodes'],
+        'properties': _SHOW_PROPERTIES,
         'sort': {'method': 'lastplayed', 'order': 'descending'},
         'limits': {'start': 0, 'end': limit}
     })
     shows = extract_result(result, 'tvshows', [])
 
-    items = []
     for show in shows:
         if show.get('episode', 0) <= show.get('watchedepisodes', 0):
             continue
 
-        last_result = request('VideoLibrary.GetEpisodes', {
-            'tvshowid': show['tvshowid'],
-            'filter': {
-                'or': [
-                    {'field': 'inprogress', 'operator': 'true', 'value': ''},
-                    {'field': 'playcount', 'operator': 'greaterthan', 'value': '0'}
-                ]
-            },
-            'properties': ['season'],
-            'sort': {'method': 'lastplayed', 'order': 'descending'},
-            'limits': {'start': 0, 'end': 1}
-        })
-        last_played = extract_result(last_result, 'episodes', [])
-
-        if not last_played:
+        episode = _next_unwatched_episode(show['tvshowid'])
+        if not episode:
             continue
 
-        season = last_played[0]['season']
-
-        next_result = request('VideoLibrary.GetEpisodes', {
-            'tvshowid': show['tvshowid'],
-            'season': season,
-            'filter': {'field': 'playcount', 'operator': 'is', 'value': '0'},
-            'properties': ['title', 'season', 'episode', 'showtitle', 'plot',
-                          'art', 'file', 'resume', 'runtime', 'firstaired',
-                          'rating', 'userrating', 'playcount', 'lastplayed'],
-            'sort': {'method': 'episode', 'order': 'ascending'},
-            'limits': {'start': 0, 'end': 1}
-        })
-        next_ep = extract_result(next_result, 'episodes', [])
-
-        if not next_ep:
-            fallback_result = request('VideoLibrary.GetEpisodes', {
-                'tvshowid': show['tvshowid'],
-                'filter': {'field': 'playcount', 'operator': 'is', 'value': '0'},
-                'properties': ['title', 'season', 'episode', 'showtitle', 'plot',
-                              'art', 'file', 'resume', 'runtime', 'firstaired',
-                              'rating', 'userrating', 'playcount', 'lastplayed'],
-                'sort': {'method': 'episode', 'order': 'ascending'},
-                'limits': {'start': 0, 'end': 1}
-            })
-            next_ep = extract_result(fallback_result, 'episodes', [])
-
-        if next_ep:
-            episode = next_ep[0]
-            listitem = _create_episode_listitem(episode)
-            _set_episode_artwork_from_show(listitem, show['art'], episode['art'])
-            video_tag = listitem.getVideoInfoTag()
-            if show.get('mpaa'):
-                video_tag.setMpaa(show['mpaa'])
-            if show.get('studio'):
-                video_tag.setStudios(show['studio'])
-            items.append((episode['file'], listitem, False))
-
-    for url, listitem, isfolder in items:
-        xbmcplugin.addDirectoryItem(handle, url, listitem, isfolder)
+        listitem = _episode_item_from_show(show, episode)
+        xbmcplugin.addDirectoryItem(handle, episode['file'], listitem, False)
 
     xbmcplugin.setContent(handle, 'episodes')
+    xbmcplugin.endOfDirectory(handle, cacheToDisc=False)
+
+
+def _favourite_tvshow_ids() -> list:
+    """TV show DBIDs pulled from the favourites list, in the order they were favourited."""
+    result = request('Favourites.GetFavourites',
+                     {'type': 'window', 'properties': ['windowparameter']})
+
+    ids = []
+    seen = set()
+    for favourite in extract_result(result, 'favourites', []):
+        match = _FAVOURITE_TVSHOW.search(favourite.get('windowparameter') or '')
+        if not match:
+            continue
+        tvshowid = int(match.group(1))
+        if tvshowid not in seen:
+            seen.add(tvshowid)
+            ids.append(tvshowid)
+    return ids
+
+
+def handle_next_up_favourites(handle: int, params: dict) -> None:
+    """Plugin entry: next unwatched episode for each favourited TV show (`limit`, default 25)."""
+    limit = int(params.get('limit', ['25'])[0])
+
+    favourite_ids = _favourite_tvshow_ids()
+    shows = {}
+    for tvshowid in favourite_ids:
+        details = get_item_details('tvshow', tvshowid, _SHOW_PROPERTIES)
+        if details:
+            details['tvshowid'] = tvshowid
+            shows[tvshowid] = details
+
+    added = 0
+    for tvshowid in favourite_ids:
+        if added >= limit:
+            break
+
+        show = shows.get(tvshowid)
+        if not show or show.get('episode', 0) <= show.get('watchedepisodes', 0):
+            continue
+
+        episode = _next_unwatched_episode(tvshowid)
+        if not episode:
+            continue
+
+        listitem = _episode_item_from_show(show, episode)
+        xbmcplugin.addDirectoryItem(handle, episode['file'], listitem, False)
+        added += 1
+
+    xbmcplugin.setContent(handle, 'episodes')
+    # favourites change without a library event, so a cached listing would go stale
+    xbmcplugin.endOfDirectory(handle, cacheToDisc=False)
+
+
+def _recently_added(method: str, result_key: str, properties: list, limit: int) -> list:
+    """Newest items by date added, from a recent window first and the whole library only when
+    that window cannot fill the widget."""
+    params = {
+        'properties': properties,
+        'sort': {'method': 'dateadded', 'order': 'descending'},
+        'limits': {'start': 0, 'end': limit},
+        'filter': _RECENT_WINDOW
+    }
+    items = extract_result(request(method, params), result_key, [])
+    if len(items) >= limit:
+        return items
+
+    del params['filter']
+    return extract_result(request(method, params), result_key, [])
+
+
+def _recent_movie_rows(limit: int) -> list:
+    """Recently added movies as `(dateadded, url, listitem, isfolder)` rows."""
+    movies = _recently_added('VideoLibrary.GetMovies', 'movies', _MOVIE_PROPERTIES, limit)
+    return [(movie.get('dateadded', ''), movie['file'],
+             _dated(_create_movie_listitem(movie), movie.get('dateadded', '')), False)
+            for movie in movies]
+
+
+def _dated(listitem: xbmcgui.ListItem, added: str) -> xbmcgui.ListItem:
+    """Stamp the added date a date-ordered widget sorts on, so skins can show it."""
+    if added:
+        listitem.getVideoInfoTag().setDateAdded(added)
+    return listitem
+
+
+def _collapsed_show_row(episodes: list, show_cache: dict) -> tuple:
+    """One row for a show's recent episodes, collapsing a same-day batch add into a show
+    folder."""
+    newest = episodes[0]
+    added = newest.get('dateadded', '')
+
+    same_day = (len(episodes) > 1
+                and added[:10] == episodes[1].get('dateadded', '')[:10]
+                and added[:10])
+    if same_day:
+        tvshowid = newest['tvshowid']
+        if tvshowid not in show_cache:
+            detail = request('VideoLibrary.GetTVShowDetails',
+                             {'tvshowid': tvshowid, 'properties': _FULL_SHOW_PROPERTIES})
+            show_cache[tvshowid] = extract_result(detail, 'tvshowdetails', {})
+        show = show_cache[tvshowid]
+        if show:
+            listitem = _dated(_create_tvshow_listitem(show), added)
+            if show.get('season'):
+                listitem.setProperty('TotalSeasons', str(show['season']))
+            return (added, f"videodb://tvshows/titles/{tvshowid}/", listitem, True)
+
+    return (added, newest['file'], _dated(_episode_item_from_show({}, newest), added), False)
+
+
+def _recent_episode_rows(limit: int, group: bool) -> list:
+    """Recently added episodes as `(dateadded, url, listitem, isfolder)` rows, one row per show
+    when grouping."""
+    episodes = _recently_added('VideoLibrary.GetEpisodes', 'episodes',
+                               _EPISODE_PROPERTIES + ['dateadded', 'tvshowid'], limit)
+
+    if not group:
+        return [(episode.get('dateadded', ''), episode['file'],
+                 _dated(_episode_item_from_show({}, episode), episode.get('dateadded', '')), False)
+                for episode in episodes]
+
+    by_show: dict = {}
+    for episode in episodes:
+        by_show.setdefault(episode.get('tvshowid'), []).append(episode)
+
+    show_cache: dict = {}
+    return [_collapsed_show_row(show_episodes, show_cache)
+            for show_episodes in by_show.values()]
+
+
+def handle_recent_videos(handle: int, params: dict) -> None:
+    """Plugin entry: recently added movies and episodes interleaved by date; `group=false` lists
+    every episode instead of one row per show."""
+    limit = int(params.get('limit', ['25'])[0])
+    group = params.get('group', ['true'])[0].lower() != 'false'
+
+    rows = _recent_movie_rows(limit) + _recent_episode_rows(limit, group)
+    rows.sort(key=lambda row: row[0], reverse=True)
+
+    for _, url, listitem, isfolder in rows[:limit]:
+        xbmcplugin.addDirectoryItem(handle, url, listitem, isfolder)
+
+    xbmcplugin.setContent(handle, 'videos')
     xbmcplugin.endOfDirectory(handle)
 
 
@@ -173,10 +365,7 @@ def handle_recent_episodes_grouped(handle: int, params: dict) -> None:
 
     result = request('VideoLibrary.GetTVShows', {
         'filter': tvshow_filter,
-        'properties': ['art', 'episode', 'watchedepisodes', 'title', 'plot', 'rating',
-                      'userrating', 'year', 'premiered', 'playcount', 'votes', 'genre',
-                      'studio', 'mpaa', 'cast', 'tag', 'dateadded', 'lastplayed',
-                      'imdbnumber', 'originaltitle', 'season'],
+        'properties': _FULL_SHOW_PROPERTIES,
         'sort': {'method': 'dateadded', 'order': 'descending'},
         'limits': {'start': 0, 'end': limit}
     })
@@ -190,9 +379,7 @@ def handle_recent_episodes_grouped(handle: int, params: dict) -> None:
             ep_result = request('VideoLibrary.GetEpisodes', {
                 'tvshowid': show['tvshowid'],
                 'filter': {'field': 'playcount', 'operator': 'is', 'value': '0'},
-                'properties': ['title', 'season', 'episode', 'showtitle', 'plot',
-                              'art', 'file', 'resume', 'runtime', 'firstaired',
-                              'rating', 'userrating', 'playcount', 'lastplayed'],
+                'properties': _EPISODE_PROPERTIES,
                 'sort': {'method': 'dateadded', 'order': 'descending'},
                 'limits': {'start': 0, 'end': 1}
             })
@@ -252,7 +439,7 @@ def handle_recent_episodes_grouped(handle: int, params: dict) -> None:
         xbmcplugin.addDirectoryItem(handle, url, listitem, isfolder)
 
     xbmcplugin.setContent(handle, 'tvshows')
-    xbmcplugin.endOfDirectory(handle)
+    xbmcplugin.endOfDirectory(handle, cacheToDisc=False)
 
 
 def _create_tvshow_listitem(show: dict) -> xbmcgui.ListItem:
@@ -425,9 +612,7 @@ def handle_by_actor(handle: int, params: dict) -> None:
     if mix or dbtype in ('movie', 'set'):
         movie_result = request('VideoLibrary.GetMovies', {
             'filter': {'actor': actor},
-            'properties': ['title', 'art', 'file', 'year', 'rating', 'userrating', 'playcount',
-                          'plot', 'tagline', 'runtime', 'genre', 'director', 'studio', 'mpaa',
-                          'trailer', 'votes', 'tag', 'dateadded', 'lastplayed', 'resume', 'cast'],
+            'properties': _MOVIE_PROPERTIES + ['cast'],
             'sort': {'method': 'random'},
             'limits': {'start': 0, 'end': limit if not mix else limit // 2}
         })
@@ -444,10 +629,7 @@ def handle_by_actor(handle: int, params: dict) -> None:
     if mix or dbtype in ('tvshow', 'season', 'episode'):
         show_result = request('VideoLibrary.GetTVShows', {
             'filter': {'actor': actor},
-            'properties': ['art', 'episode', 'watchedepisodes', 'title', 'plot', 'rating',
-                          'userrating', 'year', 'premiered', 'playcount', 'votes', 'genre',
-                          'studio', 'mpaa', 'cast', 'tag', 'dateadded', 'lastplayed',
-                          'imdbnumber', 'originaltitle'],
+            'properties': _FULL_SHOW_PROPERTIES,
             'sort': {'method': 'random'},
             'limits': {'start': 0, 'end': limit if not mix else limit // 2}
         })
@@ -603,9 +785,7 @@ def handle_by_director(handle: int, params: dict) -> None:
     if mix or dbtype in ('movie', 'set'):
         movie_result = request('VideoLibrary.GetMovies', {
             'filter': {'field': 'director', 'operator': 'is', 'value': director},
-            'properties': ['title', 'art', 'file', 'year', 'rating', 'userrating', 'playcount',
-                          'plot', 'tagline', 'runtime', 'genre', 'director', 'studio', 'mpaa',
-                          'trailer', 'votes', 'tag', 'dateadded', 'lastplayed', 'resume'],
+            'properties': _MOVIE_PROPERTIES,
             'sort': {'method': 'random'},
             'limits': {'start': 0, 'end': limit if not mix else limit // 2}
         })
@@ -619,35 +799,18 @@ def handle_by_director(handle: int, params: dict) -> None:
     if mix or dbtype == 'episode':
         episode_result = request('VideoLibrary.GetEpisodes', {
             'filter': {'field': 'director', 'operator': 'is', 'value': director},
-            'properties': ['title', 'season', 'episode', 'showtitle', 'plot', 'art', 'file',
-                          'resume', 'runtime', 'firstaired', 'rating', 'userrating', 'playcount',
-                          'lastplayed', 'tvshowid'],
+            'properties': _EPISODE_PROPERTIES,
             'sort': {'method': 'random'},
             'limits': {'start': 0, 'end': limit if not mix else limit // 2}
         })
         episodes = extract_result(episode_result, 'episodes', [])
 
-        show_art_cache: dict[int, dict] = {}
         for episode in episodes:
             if episode.get('episodeid') != dbid or dbtype != 'episode':
+                episode_art = episode.get('art', {})
                 listitem = _create_episode_listitem(episode)
-
-                tvshowid = episode.get('tvshowid')
-                if tvshowid:
-                    if tvshowid not in show_art_cache:
-                        show_result = request('VideoLibrary.GetTVShowDetails', {
-                            'tvshowid': tvshowid,
-                            'properties': ['art']
-                        })
-                        show = extract_result(show_result, 'tvshowdetails', {})
-                        show_art_cache[tvshowid] = (
-                            show.get('art', {}) if isinstance(show, dict) else {}
-                        )
-
-                    show_art = show_art_cache[tvshowid]
-                    if show_art:
-                        _set_episode_artwork_from_show(listitem, show_art, episode['art'])
-
+                _set_episode_artwork_from_show(listitem, _show_art_from_episode(episode_art),
+                                               episode_art)
                 all_items.append((episode['file'], listitem, False))
 
     random.shuffle(all_items)
@@ -665,199 +828,259 @@ def handle_by_director(handle: int, params: dict) -> None:
     xbmcplugin.endOfDirectory(handle)
 
 
-def handle_similar(handle: int, params: dict) -> None:
-    """Plugin entry: library items similar to the source, scored by genre overlap plus
-    year/MPAA proximity; prefers library `dbid`+`dbtype`, falls back to `tmdb_id`+`dbtype`
-    (no MPAA score)."""
-    dbid_param = params.get('dbid', [''])[0]
-    tmdb_id_param = params.get('tmdb_id', [''])[0]
-    dbtype = params.get('dbtype', ['movie'])[0]
-    limit = int(params.get('limit', ['25'])[0])
+def _int_param(params: dict, name: str, default: int) -> int:
+    """Read an integer plugin argument, falling back to the default on anything unparseable."""
+    try:
+        return int(params.get(name, [str(default)])[0])
+    except (ValueError, TypeError):
+        return default
 
-    if not dbid_param and not tmdb_id_param:
-        xbmcplugin.endOfDirectory(handle)
-        return
 
-    dbid = 0
-    genres: list = []
-    source_year = 0
-    source_mpaa = ''
+def _vote_count(item: dict) -> float:
+    """Vote count as a number; Kodi returns it as a grouped string."""
+    raw = item.get('votes')
+    if isinstance(raw, (int, float)):
+        return float(raw)
+    digits = re.sub(r'[^0-9]', '', str(raw or ''))
+    return float(digits) if digits else 0.0
 
-    if dbid_param:
-        try:
-            dbid = int(dbid_param)
-        except (ValueError, TypeError):
-            dbid = 0
 
-    if dbid:
-        if dbtype == 'episode':
-            # Episodes carry no year/mpaa; score against the parent show instead.
-            ep = get_item_details('episode', dbid, ['genre', 'tvshowid'])
-            if ep:
-                raw_genres = ep.get('genre', [])
-                if not isinstance(raw_genres, list):
-                    raw_genres = [raw_genres] if raw_genres else []
-                genres = raw_genres
-                show = get_item_details('tvshow', ep.get('tvshowid', 0),
-                                        ['genre', 'year', 'mpaa'])
-                if show:
-                    if not genres:
-                        sg = show.get('genre', [])
-                        genres = sg if isinstance(sg, list) else ([sg] if sg else [])
-                    source_year = show.get('year', 0)
-                    source_mpaa = show.get('mpaa', '')
-        else:
-            item = get_item_details(dbtype, dbid, ['genre', 'year', 'mpaa'])
-            if item:
-                raw_genres = item.get('genre', [])
-                if not isinstance(raw_genres, list):
-                    raw_genres = [raw_genres] if raw_genres else []
-                genres = raw_genres
-                source_year = item.get('year', 0)
-                source_mpaa = item.get('mpaa', '')
+def _as_set(value) -> set:
+    """Coerce a Kodi field that may be a list, a bare string or absent into a set."""
+    if isinstance(value, list):
+        return {v for v in value if v}
+    return {value} if value else set()
 
-    if not genres and tmdb_id_param:
+
+def _similar_tag_weights(rows: list) -> dict:
+    """Inverse document frequency per tag over the candidate pool, so common tags count least."""
+    counts: dict = {}
+    for row in rows:
+        for tag in _as_set(row.get('tag')) - _TAG_STOPLIST:
+            counts[tag] = counts.get(tag, 0) + 1
+
+    total = max(len(rows), 1)
+    return {tag: math.log(total / seen) for tag, seen in counts.items()}
+
+
+def _tag_norm(tags: set, weights: dict) -> float:
+    """Euclidean norm of a tag set under the IDF weights, for cosine similarity."""
+    return math.sqrt(sum(weights.get(t, 0.0) ** 2 for t in tags)) or 1.0
+
+
+def _similar_tier_score(seed: dict, cand: dict, weights: dict) -> float:
+    """Rank a candidate against the seed within its genre tier; never large enough to cross one."""
+    shared = seed['tags'] & cand['tags']
+    if shared:
+        cosine = sum(weights.get(t, 0.0) for t in shared) / (seed['norm'] * cand['norm'])
+        score = _TAG_WEIGHT * min(1.0, cosine / _TAG_FULL_MATCH)
+    else:
+        score = 0.0
+
+    if seed['directors'] & cand['directors']:
+        score += 1.5
+    if seed['writers'] & cand['writers']:
+        score += 0.9
+    if seed['studios'] & cand['studios']:
+        score += 0.4
+
+    if seed['year'] and cand.get('year'):
+        gap = abs(seed['year'] - cand['year'])
+        score += 1.5 if gap <= 5 else 1.0 if gap <= 10 else 0.5 if gap <= 20 else 0.0
+
+    if seed['certificate'][1] and seed['certificate'] == cand['certificate']:
+        score += 0.6
+
+    # Kodi surfaces sets of its own
+    if seed['setid'] and seed['setid'] == cand.get('setid'):
+        score -= _SAME_SET_PENALTY
+
+    score += 1.5 * min(1.0, math.log1p(_vote_count(cand)) / _MAX_VOTE_LOG)
+    return score + 0.15 * (cand.get('rating') or 0.0)
+
+
+def _similar_pool(target_dbtype: str, genres: list, path: str) -> list:
+    """Every candidate the seed could match, from an XSP path when given, else by shared genre."""
+    properties = (_SIMILAR_MOVIE_SCORING if target_dbtype == 'movie'
+                  else _SIMILAR_SHOW_SCORING)
+
+    if path:
+        result = request('Files.GetDirectory',
+                         {'directory': path, 'media': 'video', 'properties': properties})
+        rows = extract_result(result, 'files', [])
+        id_field = 'movieid' if target_dbtype == 'movie' else 'tvshowid'
+        for row in rows:
+            row[id_field] = row.get('id', 0)
+        return rows
+
+    genre_filter = {'field': 'genre', 'operator': 'is', 'value': genres}
+    if target_dbtype == 'movie':
+        result = request('VideoLibrary.GetMovies',
+                         {'filter': genre_filter, 'properties': properties})
+        return extract_result(result, 'movies', [])
+
+    result = request('VideoLibrary.GetTVShows',
+                     {'filter': genre_filter, 'properties': properties})
+    return extract_result(result, 'tvshows', [])
+
+
+def _watch_state_wanted(row: dict, target_dbtype: str, wanted: str) -> bool:
+    """True when a candidate's watch state matches the requested `watched` filter."""
+    if wanted not in ('watched', 'unwatched'):
+        return True
+
+    # a show's playcount only turns 1 once every episode is watched
+    seen = (row.get('playcount') or 0) if target_dbtype == 'movie' else (
+        row.get('watchedepisodes') or 0)
+    return bool(seen) if wanted == 'watched' else not seen
+
+
+def _similar_seed(dbtype: str, dbid: int, tmdb_id_param: str) -> dict:
+    """Resolve the seed's scoring fields from the library, falling back to TMDB genres."""
+    seed = {'genres': [], 'year': 0, 'mpaa': '', 'tags': set(), 'directors': set(),
+            'writers': set(), 'studios': set(), 'setid': 0}
+
+    if dbid and dbtype != 'set':
+        properties = (_SIMILAR_MOVIE_SCORING if dbtype == 'movie'
+                      else _SIMILAR_SHOW_SCORING)
+        item = get_item_details(dbtype, dbid, properties)
+        if item:
+            seed['genres'] = list(_as_set(item.get('genre')))
+            _fill_seed_fields(seed, item)
+
+    if not seed['genres'] and tmdb_id_param and dbtype in ('movie', 'tvshow'):
         try:
             tmdb_id = int(tmdb_id_param)
         except (ValueError, TypeError):
             tmdb_id = 0
-
-        if tmdb_id and dbtype in ('movie', 'tvshow'):
+        if tmdb_id:
             from lib.data.api.tmdb import ApiTmdb
-            tmdb_data = ApiTmdb().get_complete_data(dbtype, tmdb_id)
-            if tmdb_data:
-                genres = [
-                    g.get('name', '') for g in (tmdb_data.get('genres') or []) if g.get('name')
-                ]
-                date_str = tmdb_data.get('release_date') or tmdb_data.get('first_air_date') or ''
-                if date_str and len(date_str) >= 4:
-                    try:
-                        source_year = int(date_str[:4])
-                    except (ValueError, TypeError):
-                        source_year = 0
+            data = ApiTmdb().get_complete_data(dbtype, tmdb_id)
+            if data:
+                seed['genres'] = [g.get('name', '') for g in (data.get('genres') or [])
+                                  if g.get('name')]
+                released = data.get('release_date') or data.get('first_air_date') or ''
+                if len(released) >= 4 and released[:4].isdigit():
+                    seed['year'] = int(released[:4])
 
-    if not genres:
+    return seed
+
+
+def _fill_seed_fields(seed: dict, item: dict) -> None:
+    """Copy the scoring fields shared by movies and shows off a resolved seed item."""
+    seed['year'] = item.get('year', 0)
+    seed['mpaa'] = item.get('mpaa', '')
+    seed['tags'] = _as_set(item.get('tag')) - _TAG_STOPLIST
+    seed['directors'] = _as_set(item.get('director'))
+    seed['writers'] = _as_set(item.get('writer'))
+    seed['studios'] = _as_set(item.get('studio'))
+    seed['setid'] = item.get('setid', 0)
+
+
+def handle_similar(handle: int, params: dict) -> None:
+    """Plugin entry: movies or shows similar to the source, ranked by shared genre count first
+    and then by tag, crew, era, certificate and popularity; `watched` filters by watch state
+    and `path` scores inside an XSP pool instead of the whole library."""
+    dbid_param = params.get('dbid', [''])[0]
+    tmdb_id_param = params.get('tmdb_id', [''])[0]
+    dbtype = params.get('dbtype', ['movie'])[0]
+    limit = _int_param(params, 'limit', 25)
+    wanted = params.get('watched', ['both'])[0].lower()
+    path = params.get('path', [''])[0]
+
+    if dbtype not in ('movie', 'set', 'tvshow') or (not dbid_param and not tmdb_id_param):
+        xbmcplugin.endOfDirectory(handle)
+        return
+
+    try:
+        dbid = int(dbid_param) if dbid_param else 0
+    except (ValueError, TypeError):
+        dbid = 0
+
+    from lib.kodi.utilities import normalize_certificate
+
+    seed = _similar_seed(dbtype, dbid, tmdb_id_param)
+    if not seed['genres']:
         xbmcplugin.endOfDirectory(handle)
         return
 
     target_dbtype = 'movie' if dbtype in ('movie', 'set') else 'tvshow'
+    id_field = 'movieid' if target_dbtype == 'movie' else 'tvshowid'
 
-    genre_filters = [{'field': 'genre', 'operator': 'contains', 'value': g} for g in genres]
-    genre_filter = {'or': genre_filters} if len(genre_filters) > 1 else genre_filters[0]
+    candidates = _similar_pool(target_dbtype, seed['genres'], path)
+    weights = _similar_tag_weights(candidates)
+    seed['norm'] = _tag_norm(seed['tags'], weights)
+    seed['certificate'] = normalize_certificate(seed['mpaa'])
+    seed_genres = set(seed['genres'])
 
-    candidates = []
+    ranked = []
+    for cand in candidates:
+        if cand.get(id_field) == dbid:
+            continue
+        if not _watch_state_wanted(cand, target_dbtype, wanted):
+            continue
 
-    # only score-relevant fields here; full details are fetched later for the survivors
+        overlap = len(seed_genres & _as_set(cand.get('genre')))
+        if not overlap:
+            continue
+
+        cand['tags'] = _as_set(cand.get('tag')) - _TAG_STOPLIST
+        cand['directors'] = _as_set(cand.get('director'))
+        cand['writers'] = _as_set(cand.get('writer'))
+        cand['studios'] = _as_set(cand.get('studio'))
+        cand['certificate'] = normalize_certificate(cand.get('mpaa'))
+        cand['norm'] = _tag_norm(cand['tags'], weights)
+        ranked.append((overlap, _similar_tier_score(seed, cand, weights), cand[id_field]))
+
+    ranked.sort(key=lambda row: (row[0], row[1]), reverse=True)
+    item_ids = [row[2] for row in ranked[:limit]]
+    if not item_ids:
+        xbmcplugin.endOfDirectory(handle)
+        return
+
     if target_dbtype == 'movie':
-        result = request('VideoLibrary.GetMovies', {
-            'filter': genre_filter,
-            'properties': ['genre', 'year', 'mpaa'],
-        })
-        candidates = extract_result(result, 'movies', [])
-        id_field = 'movieid'
+        method, result_key = 'VideoLibrary.GetMovieDetails', 'moviedetails'
+        detail_properties = _MOVIE_PROPERTIES
     else:
-        result = request('VideoLibrary.GetTVShows', {
-            'filter': genre_filter,
-            'properties': ['genre', 'year', 'mpaa'],
-        })
-        candidates = extract_result(result, 'tvshows', [])
-        id_field = 'tvshowid'
+        method, result_key = 'VideoLibrary.GetTVShowDetails', 'tvshowdetails'
+        detail_properties = _FULL_SHOW_PROPERTIES
 
-    scored_items = []
-    for candidate in candidates:
-        if candidate.get(id_field) == dbid:
+    details = batch_request([
+        {'method': method, 'params': {id_field: item_id, 'properties': detail_properties}}
+        for item_id in item_ids
+    ])
+
+    for item_id, detail in zip(item_ids, details):
+        full = extract_result(detail, result_key, {})
+        if not full:
             continue
-
-        cand_genres = candidate.get('genre', [])
-        if not isinstance(cand_genres, list):
-            cand_genres = [cand_genres] if cand_genres else []
-
-        if not cand_genres:
-            continue
-
-        genre_overlap = len(set(genres) & set(cand_genres))
-        if genre_overlap == 0:
-            continue
-
-        score = genre_overlap * 10
-
-        cand_year = candidate.get('year', 0)
-        if source_year and cand_year:
-            year_diff = abs(source_year - cand_year)
-            if year_diff <= 5:
-                score += 3
-            elif year_diff <= 10:
-                score += 2
-            elif year_diff <= 20:
-                score += 1
-
-        cand_mpaa = candidate.get('mpaa', '')
-        if source_mpaa and cand_mpaa and source_mpaa == cand_mpaa:
-            score += 2
-
-        scored_items.append((score, candidate))
-
-    scored_items.sort(key=lambda x: (x[0], random.random()), reverse=True)
-    scored_items = scored_items[:limit]
-
-    movie_props = ['title', 'art', 'file', 'year', 'rating', 'userrating', 'playcount',
-                   'plot', 'tagline', 'runtime', 'genre', 'director', 'studio', 'mpaa',
-                   'trailer', 'votes', 'tag', 'dateadded', 'lastplayed', 'resume']
-    tvshow_props = ['art', 'episode', 'watchedepisodes', 'title', 'plot', 'rating',
-                    'userrating', 'year', 'premiered', 'playcount', 'votes', 'genre',
-                    'studio', 'mpaa', 'cast', 'tag', 'dateadded', 'lastplayed',
-                    'imdbnumber', 'originaltitle']
-
-    # full properties fetched only for items that survived scoring
-    all_items = []
-    for _score, item_data in scored_items:
-        item_id = item_data[id_field]
+        full[id_field] = item_id
         if target_dbtype == 'movie':
-            detail = request('VideoLibrary.GetMovieDetails',
-                             {'movieid': item_id, 'properties': movie_props})
-            full = extract_result(detail, 'moviedetails', {})
-            if not full:
-                continue
-            full['movieid'] = item_id
-            listitem = _create_movie_listitem(full)
-            all_items.append((full.get('file', ''), listitem, False))
+            xbmcplugin.addDirectoryItem(handle, full.get('file', ''),
+                                        _create_movie_listitem(full), False)
         else:
-            detail = request('VideoLibrary.GetTVShowDetails',
-                             {'tvshowid': item_id, 'properties': tvshow_props})
-            full = extract_result(detail, 'tvshowdetails', {})
-            if not full:
-                continue
-            full['tvshowid'] = item_id
-            listitem = _create_tvshow_listitem(full)
-            all_items.append((f"videodb://tvshows/titles/{item_id}/", listitem, True))
+            xbmcplugin.addDirectoryItem(handle, f"videodb://tvshows/titles/{item_id}/",
+                                        _create_tvshow_listitem(full), True)
 
-    for url, listitem, isfolder in all_items:
-        xbmcplugin.addDirectoryItem(handle, url, listitem, isfolder)
-
-    if target_dbtype == 'movie':
-        xbmcplugin.setContent(handle, 'movies')
-    else:
-        xbmcplugin.setContent(handle, 'tvshows')
+    xbmcplugin.setContent(handle, 'movies' if target_dbtype == 'movie' else 'tvshows')
     xbmcplugin.endOfDirectory(handle, succeeded=True)
-
-
 def _fetch_unwatched(dbtype: str, genre_filter: dict) -> list:
-    """Unwatched movies/shows matching `genre_filter`, each tagged with `_mtype`."""
+    """Unwatched movies and shows for a genre, each tagged with its media type."""
     candidates = []
     if dbtype in ('movie', 'both'):
         result = request('VideoLibrary.GetMovies', {
             'filter': {'and': [{'field': 'playcount', 'operator': 'is', 'value': '0'},
                                genre_filter]},
-            'properties': ['genre', 'year', 'mpaa', 'rating', 'cast', 'director'],
+            'properties': ['genre', 'year', 'mpaa', 'rating', 'director'],
         })
         for movie in extract_result(result, 'movies', []):
             movie['_mtype'] = 'movie'
             candidates.append(movie)
     if dbtype in ('tvshow', 'both'):
         result = request('VideoLibrary.GetTVShows', {
-            'filter': {'and': [{'field': 'playcount', 'operator': 'lessthan', 'value': '1'},
+            'filter': {'and': [{'field': 'numwatched', 'operator': 'is', 'value': '0'},
                                genre_filter]},
-            'properties': ['genre', 'year', 'mpaa', 'rating', 'cast'],
+            'properties': ['genre', 'year', 'mpaa', 'rating'],
         })
         for show in extract_result(result, 'tvshows', []):
             show['_mtype'] = 'tvshow'
@@ -866,10 +1089,10 @@ def _fetch_unwatched(dbtype: str, genre_filter: dict) -> list:
 
 
 def _top_rated_unwatched(dbtype: str, count: int, mpaa: str = '') -> list:
-    """Top-rated unwatched titles for padding a sparse single-seed widget; `mpaa` restricts to
-    the seed's tone so padding stays related to it."""
-    def _filter(unwatched_op: str, unwatched_val: str) -> dict:
-        unwatched = {'field': 'playcount', 'operator': unwatched_op, 'value': unwatched_val}
+    """Top-rated unwatched titles for padding a sparse single-seed widget, certificate-matched
+    to the seed so padding stays related to it."""
+    def _filter(field: str) -> dict:
+        unwatched = {'field': field, 'operator': 'is', 'value': '0'}
         if mpaa:
             return {'and': [unwatched,
                             {'field': 'mpaarating', 'operator': 'is', 'value': mpaa}]}
@@ -878,7 +1101,7 @@ def _top_rated_unwatched(dbtype: str, count: int, mpaa: str = '') -> list:
     extra = []
     if dbtype in ('movie', 'both'):
         result = request('VideoLibrary.GetMovies', {
-            'filter': _filter('is', '0'),
+            'filter': _filter('playcount'),
             'properties': ['rating'], 'sort': {'method': 'rating', 'order': 'descending'},
             'limits': {'start': 0, 'end': count},
         })
@@ -887,7 +1110,7 @@ def _top_rated_unwatched(dbtype: str, count: int, mpaa: str = '') -> list:
             extra.append(movie)
     if dbtype in ('tvshow', 'both'):
         result = request('VideoLibrary.GetTVShows', {
-            'filter': _filter('lessthan', '1'),
+            'filter': _filter('numwatched'),
             'properties': ['rating'], 'sort': {'method': 'rating', 'order': 'descending'},
             'limits': {'start': 0, 'end': count},
         })
@@ -900,20 +1123,13 @@ def _top_rated_unwatched(dbtype: str, count: int, mpaa: str = '') -> list:
 def _render_recommended(handle: int, scored_items: list, based_on_label: str, dbtype: str) -> None:
     """Turn the chosen picks into directory items, tagged with their seed title and the
     "based on" header label."""
-    movie_props = ['title', 'art', 'file', 'year', 'rating', 'userrating', 'playcount',
-                   'plot', 'tagline', 'runtime', 'genre', 'director', 'studio', 'mpaa',
-                   'trailer', 'votes', 'tag', 'dateadded', 'lastplayed', 'resume', 'cast']
-    tvshow_props = ['art', 'episode', 'watchedepisodes', 'title', 'plot', 'rating',
-                    'userrating', 'year', 'premiered', 'playcount', 'votes', 'genre',
-                    'studio', 'mpaa', 'cast', 'tag', 'dateadded', 'lastplayed',
-                    'imdbnumber', 'originaltitle', 'season']
 
     all_items = []
     for item_data, based_on_raw in scored_items:
         if item_data['_mtype'] == 'movie':
             item_id = item_data['movieid']
             detail = request('VideoLibrary.GetMovieDetails',
-                             {'movieid': item_id, 'properties': movie_props})
+                             {'movieid': item_id, 'properties': _MOVIE_PROPERTIES + ['cast']})
             full = extract_result(detail, 'moviedetails', {})
             if not full:
                 continue
@@ -926,7 +1142,7 @@ def _render_recommended(handle: int, scored_items: list, based_on_label: str, db
         else:
             item_id = item_data['tvshowid']
             detail = request('VideoLibrary.GetTVShowDetails',
-                             {'tvshowid': item_id, 'properties': tvshow_props})
+                             {'tvshowid': item_id, 'properties': _FULL_SHOW_PROPERTIES})
             full = extract_result(detail, 'tvshowdetails', {})
             if not full:
                 continue
@@ -948,13 +1164,13 @@ def _render_recommended(handle: int, scored_items: list, based_on_label: str, db
         xbmcplugin.setContent(handle, 'tvshows')
     else:
         xbmcplugin.setContent(handle, 'videos')
-    xbmcplugin.endOfDirectory(handle)
+    xbmcplugin.endOfDirectory(handle, cacheToDisc=False)
 
 
 def _recommend_single(handle: int, history: list, dbtype: str, limit: int,
                       min_rating: float, strict_rating: bool) -> None:
     """Recommend unwatched titles most like the single most recent watch (genre, tone,
-    director, cast, era); pads with top-rated unwatched so it isn't sparse, with a
+    director, era); pads with top-rated unwatched so it isn't sparse, with a
     truthful "Based on <that movie>" header."""
     seed = None
     seed_set: frozenset = frozenset()
@@ -966,7 +1182,7 @@ def _recommend_single(handle: int, history: list, dbtype: str, limit: int,
             seed, seed_set = entry, frozenset(eg)
             break
     if seed is None:
-        xbmcplugin.endOfDirectory(handle)
+        xbmcplugin.endOfDirectory(handle, cacheToDisc=False)
         return
     seed_title = seed.get('title', '')
 
@@ -974,7 +1190,6 @@ def _recommend_single(handle: int, history: list, dbtype: str, limit: int,
     seed_year = seed.get('year', 0)
     sd = seed.get('director', [])
     seed_directors = set(sd if isinstance(sd, list) else [sd] if sd else [])
-    seed_cast = {m.get('name', '') for m in (seed.get('cast', []) or [])[:8] if m.get('name')}
 
     genre_filters = [{'field': 'genre', 'operator': 'contains', 'value': g} for g in seed_set]
     genre_filter = {'or': genre_filters} if len(genre_filters) > 1 else genre_filters[0]
@@ -993,7 +1208,7 @@ def _recommend_single(handle: int, history: list, dbtype: str, limit: int,
         inter = len(cset & seed_set)
         if not inter:
             continue
-        # score vs the one seed only (genre, tone, director/cast, era), not a history blend
+        # score vs the one seed only (genre, tone, director, era), not a history blend
         score = inter / len(cset | seed_set)
         if cmpaa and cmpaa == seed_mpaa:
             score += 0.25
@@ -1002,8 +1217,6 @@ def _recommend_single(handle: int, history: list, dbtype: str, limit: int,
             cd = [cd] if cd else []
         if seed_directors.intersection(cd):
             score += 0.30
-        if seed_cast.intersection(m.get('name', '') for m in (c.get('cast', []) or [])[:8]):
-            score += 0.20
         cyear = c.get('year', 0)
         if cyear and seed_year:
             yd = abs(cyear - seed_year)
@@ -1056,7 +1269,7 @@ def handle_recommended(handle: int, params: dict) -> None:
     if dbtype in ('movie', 'both'):
         movie_history = request('VideoLibrary.GetMovies', {
             'filter': {'field': 'playcount', 'operator': 'greaterthan', 'value': '0'},
-            'properties': ['title', 'genre', 'year', 'mpaa', 'rating', 'cast', 'director',
+            'properties': ['title', 'genre', 'year', 'mpaa', 'rating', 'director',
                            'lastplayed'],
             'sort': {'method': 'lastplayed', 'order': 'descending'},
             'limits': {'start': 0, 'end': history_size}
@@ -1065,9 +1278,10 @@ def handle_recommended(handle: int, params: dict) -> None:
         history.extend(movies)
 
     if dbtype in ('tvshow', 'both'):
+        # tvshow playcount only turns 1 once every episode is watched, numwatched is per episode
         show_history = request('VideoLibrary.GetTVShows', {
-            'filter': {'field': 'playcount', 'operator': 'greaterthan', 'value': '0'},
-            'properties': ['title', 'genre', 'year', 'mpaa', 'rating', 'cast', 'lastplayed'],
+            'filter': {'field': 'numwatched', 'operator': 'greaterthan', 'value': '0'},
+            'properties': ['title', 'genre', 'year', 'mpaa', 'rating', 'lastplayed'],
             'sort': {'method': 'lastplayed', 'order': 'descending'},
             'limits': {'start': 0, 'end': history_size}
         })
@@ -1075,7 +1289,7 @@ def handle_recommended(handle: int, params: dict) -> None:
         history.extend(shows)
 
     if not history:
-        xbmcplugin.endOfDirectory(handle)
+        xbmcplugin.endOfDirectory(handle, cacheToDisc=False)
         return
 
     history.sort(key=lambda x: x.get('lastplayed', ''), reverse=True)
@@ -1089,7 +1303,6 @@ def handle_recommended(handle: int, params: dict) -> None:
     all_watched_genres = set()
     mpaa_counts = {}
     years = []
-    actors = {}
     directors = {}
 
     for idx, item in enumerate(history):
@@ -1111,12 +1324,6 @@ def handle_recommended(handle: int, params: dict) -> None:
         if year:
             years.append(year)
 
-        cast = item.get('cast', [])
-        for member in cast[:3]:
-            name = member.get('name', '')
-            if name:
-                actors[name] = actors.get(name, 0) + weight
-
         item_directors = item.get('director', [])
         if not isinstance(item_directors, list):
             item_directors = [item_directors] if item_directors else []
@@ -1125,13 +1332,12 @@ def handle_recommended(handle: int, params: dict) -> None:
                 directors[director] = directors.get(director, 0) + weight
 
     if not watched_sets:
-        xbmcplugin.endOfDirectory(handle)
+        xbmcplugin.endOfDirectory(handle, cacheToDisc=False)
         return
 
     total_weight = sum(w for _, w, _ in watched_sets)
     preferred_mpaa = set(mpaa_counts.keys())
     median_year = sorted(years)[len(years) // 2] if years else 0
-    favorite_actors = {a for a, w in actors.items() if w >= 1.5}
     favorite_directors = {d for d, w in directors.items() if w >= 1.5}
 
     genre_filters = [{'field': 'genre', 'operator': 'contains', 'value': g}
@@ -1149,7 +1355,7 @@ def handle_recommended(handle: int, params: dict) -> None:
         }
         result = request('VideoLibrary.GetMovies', {
             'filter': movie_filter,
-            'properties': ['genre', 'year', 'mpaa', 'rating', 'cast', 'director'],
+            'properties': ['genre', 'year', 'mpaa', 'rating', 'director'],
         })
         for movie in extract_result(result, 'movies', []):
             movie['_mtype'] = 'movie'
@@ -1158,19 +1364,19 @@ def handle_recommended(handle: int, params: dict) -> None:
     if dbtype in ('tvshow', 'both'):
         tvshow_filter = {
             'and': [
-                {'field': 'playcount', 'operator': 'lessthan', 'value': '1'},
+                {'field': 'numwatched', 'operator': 'is', 'value': '0'},
                 genre_filter
             ]
         }
         result = request('VideoLibrary.GetTVShows', {
             'filter': tvshow_filter,
-            'properties': ['genre', 'year', 'mpaa', 'rating', 'cast'],
+            'properties': ['genre', 'year', 'mpaa', 'rating'],
         })
         for show in extract_result(result, 'tvshows', []):
             show['_mtype'] = 'tvshow'
             candidates.append(show)
 
-    # quality multiplier (tone/year/cast/director) ranks picks within each watch's own slots
+    # quality multiplier (tone/year/director) ranks picks within each watch's own slots
     pool = []
     for candidate in candidates:
         cand_genres = candidate.get('genre', [])
@@ -1193,8 +1399,6 @@ def handle_recommended(handle: int, params: dict) -> None:
                 quality += 0.15
             elif year_distance <= 15:
                 quality += 0.06
-        if any(m.get('name', '') in favorite_actors for m in candidate.get('cast', [])[:5]):
-            quality += 0.10
         cand_directors = candidate.get('director', [])
         if not isinstance(cand_directors, list):
             cand_directors = [cand_directors] if cand_directors else []
@@ -1270,9 +1474,7 @@ SEASONAL_FRANCHISES = {
     'startrek': {'title': 'Star Trek', 'collections': []},
 }
 
-_MOVIE_PROPS = ['title', 'sorttitle', 'originaltitle', 'art', 'file', 'year', 'rating',
-                'userrating', 'playcount', 'plot', 'tagline', 'runtime', 'genre', 'director',
-                'studio', 'mpaa', 'trailer', 'votes', 'tag', 'dateadded', 'lastplayed', 'resume']
+_SEASONAL_MOVIE_PROPERTIES = _MOVIE_PROPERTIES + ['sorttitle', 'originaltitle']
 
 # widget sort method -> (movie field, reverse, is_text)
 _SORT_KEYS = {
@@ -1307,14 +1509,13 @@ def _sort_movies(movies: list, method: str) -> None:
 
 
 def _library_movies_by_tmdb(tmdb_ids: set) -> list:
-    """Full movie dicts for library movies whose uniqueid.tmdb is in `tmdb_ids`."""
-    scan = request('VideoLibrary.GetMovies', {'properties': ['uniqueid']})
-    movieids = [m['movieid'] for m in extract_result(scan, 'movies', [])
-                if str((m.get('uniqueid') or {}).get('tmdb')) in tmdb_ids]
+    """Full movie dicts for library movies matching the given TMDB ids."""
+    from lib.data.database.rollcall import get_dbids_by_tmdb
+
     out = []
-    for movieid in movieids:
+    for movieid in get_dbids_by_tmdb('movie', tmdb_ids).values():
         detail = request('VideoLibrary.GetMovieDetails',
-                         {'movieid': movieid, 'properties': _MOVIE_PROPS})
+                         {'movieid': movieid, 'properties': _SEASONAL_MOVIE_PROPERTIES})
         movie = extract_result(detail, 'moviedetails', {})
         if movie:
             out.append(movie)
@@ -1330,7 +1531,7 @@ def _franchise_movies(franchise: dict, limit: int, sort_method: str) -> list:
             {'field': 'set', 'operator': 'contains', 'value': name},
             {'field': 'title', 'operator': 'contains', 'value': name},
         ]},
-        'properties': _MOVIE_PROPS + ['uniqueid'],
+        'properties': _SEASONAL_MOVIE_PROPERTIES + ['uniqueid'],
     })
     movies = extract_result(result, 'movies', [])
     have = {str((m.get('uniqueid') or {}).get('tmdb')) for m in movies}
@@ -1357,7 +1558,7 @@ def _query_movies(movie_filter: dict, sort_method: str, limit: int) -> list:
     reverse = _SORT_KEYS.get(sort_method, ('', False, False))[1]
     result = request('VideoLibrary.GetMovies', {
         'filter': movie_filter,
-        'properties': _MOVIE_PROPS,
+        'properties': _SEASONAL_MOVIE_PROPERTIES,
         'sort': {'method': sort_method, 'order': 'descending' if reverse else 'ascending'},
         'limits': {'start': 0, 'end': limit},
     })

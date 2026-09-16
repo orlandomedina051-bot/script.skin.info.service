@@ -29,7 +29,7 @@ class ApiOmdb(RatingSource):
             rate_limit=(20, 1.0)
         )
 
-    def fetch_data(self, imdb_id: str, abort_flag=None,
+    def fetch_data(self, media_type: str, imdb_id: str, abort_flag=None,
                    force_refresh: bool = False) -> Optional[dict]:
         """Fetch full OMDb data for an item; `force_refresh` skips cache read but still writes."""
         if not self.api_key:
@@ -39,7 +39,7 @@ class ApiOmdb(RatingSource):
             return None
 
         if not force_refresh:
-            cached = self.get_cached_data(imdb_id)
+            cached = self.get_cached_data(media_type, imdb_id)
             if cached:
                 return cached
 
@@ -60,7 +60,7 @@ class ApiOmdb(RatingSource):
                 log("OMDb", f"API error for {imdb_id}: {error}", xbmc.LOGDEBUG)
                 return None
 
-            self.cache_data(imdb_id, data)
+            self.cache_data(media_type, imdb_id, data)
             return data
 
         except RateLimitHit:
@@ -71,9 +71,9 @@ class ApiOmdb(RatingSource):
             log("OMDb", f"Fetch error for {imdb_id}: {str(e)}", xbmc.LOGWARNING)
             return None
 
-    def get_omdb_data(self, imdb_id: str) -> Optional[dict]:
+    def get_omdb_data(self, media_type: str, imdb_id: str) -> Optional[dict]:
         """Get full cached OMDb response."""
-        return self.get_cached_data(imdb_id)
+        return self.get_cached_data(media_type, imdb_id)
 
     def fetch_ratings(
         self,
@@ -81,30 +81,29 @@ class ApiOmdb(RatingSource):
         ids: Dict[str, str],
         abort_flag=None,
         force_refresh: bool = False,
-        pause_reporter=None,
     ) -> Optional[Dict[str, Dict[str, float]]]:
-        """Fetch ratings from OMDb (RatingSource interface). ids must contain 'imdb'."""
-        if media_type == "episode":
+        """Fetch ratings from OMDb (RatingSource interface); needs an IMDb id."""
+        if not self.supports(media_type):
             return None
         imdb_id = ids.get("imdb")
         if not imdb_id:
             return None
 
-        self.session.set_pause_context(pause_reporter, self.provider_name)
-        try:
-            data = self.fetch_data(imdb_id, abort_flag, force_refresh=force_refresh)
-            if not data:
-                return None
-
-            return self._extract_ratings(data)
-        finally:
-            self.session.clear_pause_context()
-
-    def get_awards(self, imdb_id: str, abort_flag=None) -> Optional[dict]:
-        """Extract awards data from OMDb (fetches if not cached)."""
-        data = self.get_omdb_data(imdb_id)
+        data = self.fetch_data(media_type, imdb_id, abort_flag, force_refresh=force_refresh)
         if not data:
-            data = self.fetch_data(imdb_id, abort_flag)
+            return None
+
+        return self._extract_ratings(data)
+
+    def supports(self, media_type: str) -> bool:
+        """OMDb rates the parent title only; it has no per-episode entry."""
+        return media_type != "episode"
+
+    def get_awards(self, media_type: str, imdb_id: str, abort_flag=None) -> Optional[dict]:
+        """Extract awards data from OMDb (fetches if not cached)."""
+        data = self.get_omdb_data(media_type, imdb_id)
+        if not data:
+            data = self.fetch_data(media_type, imdb_id, abort_flag)
 
         if not data or not data.get('Awards'):
             return None
